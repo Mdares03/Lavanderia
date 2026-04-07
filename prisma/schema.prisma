@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Machine {
+  id                     String        @id @default(cuid())
+  name                   String        @unique
+  type                   String
+  relayChannel           Int           @unique
+  defaultPriceCents      Int
+  defaultDurationMinutes Int
+  outOfService           Boolean       @default(false)
+  isActive               Boolean       @default(true)
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  transactions           Transaction[]
+}
+
+model Employee {
+  id            String         @id @default(cuid())
+  name          String
+  pin           String
+  isAdmin       Boolean        @default(false)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  shifts        Shift[]
+  transactions  Transaction[]
+  cashMovements CashMovement[]
+  extensions    TransactionExtension[]
+}
+
+model Customer {
+  id           String        @id @default(cuid())
+  firstName    String
+  lastName     String
+  phone        String        @unique
+  email        String?
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+
+  @@index([lastName, firstName])
+}
+
+model Transaction {
+  id                     String                 @id @default(cuid())
+  ticketNumber           Int                    @unique
+  machineId              String
+  machine                Machine                @relation(fields: [machineId], references: [id])
+  employeeId             String
+  employee               Employee               @relation(fields: [employeeId], references: [id])
+  customerId             String
+  customer               Customer               @relation(fields: [customerId], references: [id])
+  baseAmountCents        Int
+  discountCents          Int                    @default(0)
+  loyaltyDiscountApplied Boolean                @default(false)
+  addonDetergentQty      Int                    @default(0)
+  addonSoftenerQty       Int                    @default(0)
+  addonBleachQty         Int                    @default(0)
+  addonAmountCents       Int                    @default(0)
+  serviceType            String                 @default("autoservicio")
+  amountCents            Int
+  paymentMethod          String
+  startedAt              DateTime
+  expectedEndAt          DateTime
+  status                 String                 @default("pending_relay")
+  endedAt                DateTime?
+  relayOnAttemptedAt     DateTime?
+  relayTurnedOnAt        DateTime?
+  relayOffAttemptedAt    DateTime?
+  relayTurnedOffAt       DateTime?
+  relayFailureReason     String?
+  voidReason             String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  extensions             TransactionExtension[]
+
+  @@index([expectedEndAt])
+  @@index([status])
+  @@index([customerId])
+}
+
+model TransactionExtension {
+  id              String      @id @default(cuid())
+  transactionId   String
+  transaction     Transaction @relation(fields: [transactionId], references: [id])
+  employeeId      String
+  employee        Employee    @relation(fields: [employeeId], references: [id])
+  extraMinutes    Int
+  extraAmountCents Int
+  reason          String?
+  createdAt       DateTime    @default(now())
+}
+
+model Shift {
+  id                  String         @id @default(cuid())
+  employeeId          String
+  employee            Employee       @relation(fields: [employeeId], references: [id])
+  startTime           DateTime       @default(now())
+  endTime             DateTime?
+  startingCashCents   Int
+  expectedCashCents   Int?
+  actualCashCents     Int?
+  differenceCashCents Int?
+  notes               String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  cashMovements       CashMovement[]
+
+  @@index([startTime])
+}
+
+model CashMovement {
+  id          String           @id @default(cuid())
+  shiftId     String
+  shift       Shift            @relation(fields: [shiftId], references: [id])
+  employeeId  String
+  employee    Employee         @relation(fields: [employeeId], references: [id])
+  type        String
+  amountCents Int
+  reason      String
+  createdAt   DateTime         @default(now())
+
+  @@index([createdAt])
+}
+
+model AppConfig {
+  id                          Int      @id @default(1)
+  businessName                String   @default("La Burbuja")
+  timezone                    String   @default("America/Monterrey")
+  currency                    String   @default("MXN")
+  serialPortPath              String   @default("COM3")
+  serialBaudRate              Int      @default(9600)
+  relayMockMode               Boolean  @default(true)
+  relayConnected              Boolean  @default(false)
+  selfServiceWashPriceCents   Int      @default(4500)
+  selfServiceDryPriceCents    Int      @default(4500)
+  selfServiceCycleMinutes     Int      @default(50)
+  encargoPricePerKgCents      Int      @default(3300)
+  encargoMinimumChargeCents   Int      @default(12000)
+  xlEdredonIndividualCents    Int      @default(15000)
+  xlEdredonMatrimonialCents   Int      @default(18000)
+  xlEdredonKingCents          Int      @default(20000)
+  xlCobijaGruesaCents         Int      @default(12000)
+  xlAlmohadaParCents          Int      @default(8000)
+  dryCleaningMinimumCents     Int      @default(15000)
+  dryCleaningUrgentSurchargePct Int     @default(50)
+  detergentAddonCents          Int      @default(500)
+  softenerAddonCents           Int      @default(500)
+  bleachAddonCents             Int      @default(500)
+  loyaltyEveryNTransactions    Int      @default(10)
+  loyaltyDiscountPct           Int      @default(50)
+  updatedAt                   DateTime @updatedAt
+}
