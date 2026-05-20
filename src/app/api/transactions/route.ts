@@ -15,6 +15,7 @@ const activationSchema = z.object({
   durationMinutes: z.number().int().positive(),
   serviceType: z.enum([SERVICE_TYPES.autoservicio, SERVICE_TYPES.encargo, SERVICE_TYPES.xl]),
   paymentMethod: z.enum(["cash", "card", "transfer"]),
+  encargoOrderId: z.string().optional(),
   addons: z.object({
     detergentQty: z.number().int().min(0).max(50),
     softenerQty: z.number().int().min(0).max(50),
@@ -29,6 +30,9 @@ export async function GET(request: Request) {
     const range = parseDateRange(url.searchParams);
     const status = url.searchParams.get("status");
     const customerId = url.searchParams.get("customerId");
+    const limitRaw = url.searchParams.get("limit");
+    const parsedLimit = limitRaw ? Number(limitRaw) : undefined;
+    const limit = parsedLimit && Number.isFinite(parsedLimit) ? Math.max(1, Math.min(200, Math.floor(parsedLimit))) : undefined;
     const transactions = await prisma.transaction.findMany({
       where: {
         createdAt: {
@@ -48,9 +52,16 @@ export async function GET(request: Request) {
         customer: {
           select: { firstName: true, lastName: true, phone: true, email: true }
         },
+        voidedByEmployee: {
+          select: { id: true, name: true }
+        },
+        parentTransaction: {
+          select: { id: true, ticketNumber: true }
+        },
         extensions: true
       },
-      orderBy: { createdAt: "desc" }
+      orderBy: { createdAt: "desc" },
+      take: limit
     });
     return ok({ transactions });
   } catch (error) {

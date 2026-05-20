@@ -8,6 +8,7 @@ const schema = z.object({
   employeeId: z.string(),
   extraMinutes: z.number().int().positive(),
   extraAmountCents: z.number().int().min(0),
+  paymentMethod: z.enum(["cash", "card", "transfer"]),
   reason: z.string().max(120).optional()
 });
 

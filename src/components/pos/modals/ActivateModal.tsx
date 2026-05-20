@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/components/pos/api";
-import type { CustomerRecord, LoyaltyRule, Machine, PricingVariables, ServiceType } from "@/components/pos/types";
+import type { CustomerRecord, EncargoOrder, LoyaltyRule, Machine, PricingVariables, ServiceType } from "@/components/pos/types";
 
 type ActivateModalProps = {
   machine: Machine;
+  encargoOrders: EncargoOrder[];
   onCancel: () => void;
   onConfirm: (
     machine: Machine,
@@ -17,6 +18,7 @@ type ActivateModalProps = {
       durationMinutes: number;
       serviceType: ServiceType;
       paymentMethod: "cash" | "card" | "transfer";
+      encargoOrderId?: string;
       addons: {
         detergentQty: number;
         softenerQty: number;
@@ -41,10 +43,11 @@ function money(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-export function ActivateModal({ machine, onCancel, onConfirm }: ActivateModalProps) {
+export function ActivateModal({ machine, encargoOrders, onCancel, onConfirm }: ActivateModalProps) {
   const [baseAmountCents, setBaseAmountCents] = useState(machine.defaultPriceCents);
   const [durationMinutes] = useState(machine.defaultDurationMinutes);
   const [serviceType, setServiceType] = useState<ServiceType>("autoservicio");
+  const [selectedEncargoOrderId, setSelectedEncargoOrderId] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer">("cash");
   const [submitting, setSubmitting] = useState(false);
   const [pricing, setPricing] = useState<PricingVariables | null>(null);
@@ -77,6 +80,14 @@ export function ActivateModal({ machine, onCancel, onConfirm }: ActivateModalPro
     softenerQty: 0,
     bleachQty: 0
   });
+
+  const activeEncargoOrders = useMemo(() => encargoOrders.filter((order) => order.status !== "entregado"), [encargoOrders]);
+
+  useEffect(() => {
+    if (serviceType !== "encargo") {
+      setSelectedEncargoOrderId("");
+    }
+  }, [serviceType]);
 
   useEffect(() => {
     apiFetch<{ pricing: PricingVariables }>("/api/settings/pricing")
@@ -293,6 +304,28 @@ export function ActivateModal({ machine, onCancel, onConfirm }: ActivateModalPro
             {pricing && serviceType === "encargo" && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Calculadora encargo</p>
+                <label className="mb-2 grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Ligar a orden encargo activa (opcional)</span>
+                  <select
+                    value={selectedEncargoOrderId}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      setSelectedEncargoOrderId(nextId);
+                      const selected = activeEncargoOrders.find((order) => order.id === nextId);
+                      if (selected) {
+                        setBaseAmountCents(selected.priceCents);
+                      }
+                    }}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    <option value="">Sin ligar a orden</option>
+                    {activeEncargoOrders.map((order) => (
+                      <option key={order.id} value={order.id}>
+                        {order.customerName || order.customerPhone || "Cliente"} - {order.status} - ${(order.priceCents / 100).toFixed(2)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                   <input
                     type="number"
@@ -442,6 +475,7 @@ export function ActivateModal({ machine, onCancel, onConfirm }: ActivateModalPro
                     durationMinutes,
                     serviceType,
                     paymentMethod,
+                    encargoOrderId: serviceType === "encargo" && selectedEncargoOrderId ? selectedEncargoOrderId : undefined,
                     addons
                   });
                 } finally {

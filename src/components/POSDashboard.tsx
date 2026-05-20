@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch } from "@/components/pos/api";
 import { LoginScreen } from "@/components/pos/LoginScreen";
@@ -8,11 +8,24 @@ import { PanelTab } from "@/components/pos/PanelTab";
 import { ReportsTab } from "@/components/pos/ReportsTab";
 import { SettingsTab } from "@/components/pos/SettingsTab";
 import { ShiftTab } from "@/components/pos/ShiftTab";
-import type { ActiveShiftPayload, Employee, Machine, RelayHealth, ReportSummary, TicketPreviewData, UtilizationRow } from "@/components/pos/types";
+import type {
+  ActiveShiftPayload,
+  DashboardTransaction,
+  Employee,
+  EncargoOrder,
+  Machine,
+  PaymentMethod,
+  RelayHealth,
+  ReportSummary,
+  TicketPreviewData,
+  UtilizationRow
+} from "@/components/pos/types";
 import { ActivateModal } from "@/components/pos/modals/ActivateModal";
 import { ChangePinModal } from "@/components/pos/modals/ChangePinModal";
+import { NewEncargoModal } from "@/components/pos/modals/NewEncargoModal";
 import { RunningModal } from "@/components/pos/modals/RunningModal";
 import { TicketPreviewModal } from "@/components/pos/modals/TicketPreviewModal";
+import { TransactionDetailModal } from "@/components/pos/modals/TransactionDetailModal";
 
 type TabId = "panel" | "corte" | "reportes" | "config";
 
@@ -50,6 +63,13 @@ type ActivationApiResponse = {
   relayError?: string;
 };
 
+function buildRange(daysBack = 2) {
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - daysBack);
+  return { from, to };
+}
+
 export function POSDashboard() {
   const [tab, setTab] = useState<TabId>("panel");
   const [pin, setPin] = useState("");
@@ -57,10 +77,15 @@ export function POSDashboard() {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [encargoOrders, setEncargoOrders] = useState<EncargoOrder[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<DashboardTransaction[]>([]);
+  const [reportTransactions, setReportTransactions] = useState<DashboardTransaction[]>([]);
   const [relayHealth, setRelayHealth] = useState<RelayHealth | null>(null);
   const [activeShift, setActiveShift] = useState<ActiveShiftPayload>({ shift: null, summary: null });
   const [activateMachineId, setActivateMachineId] = useState<string | null>(null);
   const [runningMachineId, setRunningMachineId] = useState<string | null>(null);
+  const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+  const [showNewEncargo, setShowNewEncargo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ticker, setTicker] = useState(Date.now());
@@ -75,6 +100,9 @@ export function POSDashboard() {
   const [showChangePin, setShowChangePin] = useState(false);
   const [ticketPreview, setTicketPreview] = useState<TicketPreviewData | null>(null);
   const isAdmin = employee?.isAdmin ?? false;
+  const finishedTxIdsRef = useRef<Set<string>>(new Set());
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
   const adminHeaders = useMemo<Record<string, string>>(
     () => (sessionPin ? { "x-admin-pin": sessionPin } : ({} as Record<string, string>)),
     [sessionPin]
@@ -83,17 +111,82 @@ export function POSDashboard() {
 
   const selectedAvailable = useMemo(() => machines.find((machine) => machine.id === activateMachineId) ?? null, [activateMachineId, machines]);
   const selectedRunning = useMemo(() => machines.find((machine) => machine.id === runningMachineId) ?? null, [runningMachineId, machines]);
+  const allTransactionsById = useMemo(() => {
+    const map = new Map<string, DashboardTransaction>();
+    for (const tx of [...recentTransactions, ...reportTransactions]) {
+      map.set(tx.id, tx);
+    }
+    return map;
+  }, [recentTransactions, reportTransactions]);
+  const selectedTransaction = selectedTransactionId ? allTransactionsById.get(selectedTransactionId) ?? null : null;
+
+  const playFinishChime = useCallback(() => {
+    try {
+      const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) {
+        return;
+      }
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioContextCtor();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+      }
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.exponentialRampToValueAtTime(0.25, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+      gain.connect(ctx.destination);
+
+      const oscA = ctx.createOscillator();
+      oscA.type = "sine";
+      oscA.frequency.setValueAtTime(740, now);
+      oscA.connect(gain);
+      oscA.start(now);
+      oscA.stop(now + 0.35);
+
+      const oscB = ctx.createOscillator();
+      oscB.type = "sine";
+      oscB.frequency.setValueAtTime(988, now + 0.28);
+      oscB.connect(gain);
+      oscB.start(now + 0.28);
+      oscB.stop(now + 0.9);
+    } catch {
+      // Sin audio soportado en el navegador.
+    }
+  }, []);
 
   const loadDashboard = useCallback(async () => {
-    const [machinesPayload, relayPayload, shiftPayload] = await Promise.all([
+    const range = buildRange(2);
+    const txQuery = `from=${encodeURIComponent(range.from.toISOString())}&to=${encodeURIComponent(range.to.toISOString())}&limit=10`;
+
+    const [machinesPayload, relayPayload, shiftPayload, txPayload, encargoPayload] = await Promise.all([
       apiFetch<{ machines: Machine[] }>("/api/machines"),
       apiFetch<{ health: RelayHealth }>("/api/system/relay"),
-      apiFetch<ActiveShiftPayload>("/api/shifts/active")
+      apiFetch<ActiveShiftPayload>("/api/shifts/active"),
+      apiFetch<{ transactions: DashboardTransaction[] }>(`/api/transactions?${txQuery}`),
+      apiFetch<{ orders: EncargoOrder[] }>("/api/encargo-orders")
     ]);
+
     setMachines(machinesPayload.machines);
     setRelayHealth(relayPayload.health);
     setActiveShift(shiftPayload);
-  }, []);
+    setRecentTransactions(txPayload.transactions);
+    setEncargoOrders(encargoPayload.orders);
+
+    const newFinishedIds = new Set<string>();
+    for (const machine of machinesPayload.machines) {
+      if (machine.status === "finished" && machine.transaction) {
+        newFinishedIds.add(machine.transaction.id);
+        if (!finishedTxIdsRef.current.has(machine.transaction.id)) {
+          playFinishChime();
+        }
+      }
+    }
+    finishedTxIdsRef.current = newFinishedIds;
+  }, [playFinishChime]);
 
   const loadEmployees = useCallback(async () => {
     if (!isAdmin) {
@@ -110,19 +203,22 @@ export function POSDashboard() {
     if (!isAdmin) {
       setReportSummary(null);
       setUtilization([]);
+      setReportTransactions([]);
       return;
     }
     const query = `from=${encodeURIComponent(new Date(reportFrom).toISOString())}&to=${encodeURIComponent(new Date(reportTo).toISOString())}`;
-    const [summaryPayload, utilizationPayload] = await Promise.all([
+    const [summaryPayload, utilizationPayload, txPayload] = await Promise.all([
       apiFetch<ReportSummary>(`/api/reports/summary?${query}`, {
         headers: adminHeaders
       }),
       apiFetch<{ utilization: UtilizationRow[] }>(`/api/reports/utilization?${query}`, {
         headers: adminHeaders
-      })
+      }),
+      apiFetch<{ transactions: DashboardTransaction[] }>(`/api/transactions?${query}&limit=400`)
     ]);
     setReportSummary(summaryPayload);
     setUtilization(utilizationPayload.utilization);
+    setReportTransactions(txPayload.transactions);
   }, [adminHeaders, isAdmin, reportFrom, reportTo]);
 
   const exportReports = useCallback(async () => {
@@ -164,9 +260,12 @@ export function POSDashboard() {
     const id = setInterval(() => {
       setTicker(Date.now());
       loadDashboard().catch(() => undefined);
+      if (tab === "reportes" && isAdmin) {
+        loadReports().catch(() => undefined);
+      }
     }, 5000);
     return () => clearInterval(id);
-  }, [loadDashboard]);
+  }, [isAdmin, loadDashboard, loadReports, tab]);
 
   useEffect(() => {
     const id = setInterval(() => setTicker(Date.now()), 1000);
@@ -200,6 +299,12 @@ export function POSDashboard() {
     setRelayHealth(null);
     setActiveShift({ shift: null, summary: null });
     setTicketPreview(null);
+    setRecentTransactions([]);
+    setReportTransactions([]);
+    setEncargoOrders([]);
+    setSelectedTransactionId(null);
+    setRunningMachineId(null);
+    setActivateMachineId(null);
   };
 
   const activate = async (
@@ -211,6 +316,7 @@ export function POSDashboard() {
       durationMinutes: number;
       serviceType: "autoservicio" | "encargo" | "xl";
       paymentMethod: "cash" | "card" | "transfer";
+      encargoOrderId?: string;
       addons: {
         detergentQty: number;
         softenerQty: number;
@@ -231,6 +337,7 @@ export function POSDashboard() {
         durationMinutes: form.durationMinutes,
         serviceType: form.serviceType,
         paymentMethod: form.paymentMethod,
+        encargoOrderId: form.encargoOrderId,
         addons: form.addons
       })
     });
@@ -273,19 +380,63 @@ export function POSDashboard() {
     await loadDashboard();
   };
 
-  const addTime = async (transactionId: string, extraMinutes: number, extraAmountCents: number) => {
+  const addTime = async (input: {
+    transactionId: string;
+    extraMinutes: number;
+    extraAmountCents: number;
+    paymentMethod: PaymentMethod;
+  }) => {
     if (!employee) {
       return;
     }
-    await apiFetch(`/api/transactions/${transactionId}/extend`, {
+    await apiFetch(`/api/transactions/${input.transactionId}/extend`, {
       method: "POST",
       body: JSON.stringify({
         employeeId: employee.id,
-        extraMinutes,
-        extraAmountCents
+        extraMinutes: input.extraMinutes,
+        extraAmountCents: input.extraAmountCents,
+        paymentMethod: input.paymentMethod
       })
     });
+    await loadDashboard();
+  };
+
+  const voidTransaction = async (input: { transactionId: string; reason: string; adminPin?: string }) => {
+    if (!employee) {
+      return;
+    }
+
+    const adminPinToUse = input.adminPin || (employee.isAdmin ? sessionPin ?? undefined : undefined);
+    await apiFetch(`/api/transactions/${input.transactionId}/void`, {
+      method: "POST",
+      headers: adminPinToUse ? { "x-admin-pin": adminPinToUse } : undefined,
+      body: JSON.stringify({
+        employeeId: employee.id,
+        reason: input.reason
+      })
+    });
+    await loadDashboard();
+    if (tab === "reportes" && isAdmin) {
+      await loadReports();
+    }
+  };
+
+  const releaseMachine = async (machineId: string) => {
+    await apiFetch(`/api/machines/${machineId}/release`, {
+      method: "POST"
+    });
     setRunningMachineId(null);
+    await loadDashboard();
+  };
+
+  const updateEncargoStatus = async (input: { orderId: string; status: EncargoOrder["status"]; paymentMethod?: PaymentMethod }) => {
+    await apiFetch(`/api/encargo-orders/${input.orderId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: input.status,
+        paymentMethod: input.paymentMethod
+      })
+    });
     await loadDashboard();
   };
 
@@ -341,13 +492,25 @@ export function POSDashboard() {
         <PanelTab
           machines={machines}
           ticker={ticker}
+          recentTransactions={recentTransactions}
+          encargoOrders={encargoOrders}
           onSelectAvailable={setActivateMachineId}
           onSelectRunning={setRunningMachineId}
+          onSelectTransaction={setSelectedTransactionId}
+          onCreateEncargo={() => setShowNewEncargo(true)}
+          onUpdateEncargoStatus={updateEncargoStatus}
         />
       )}
 
       {tab === "corte" && (
-        <ShiftTab employee={employee} activeShift={activeShift} onRefresh={loadDashboard} onError={setError} />
+        <ShiftTab
+          employee={employee}
+          adminPin={sessionPin}
+          activeShift={activeShift}
+          onRefresh={loadDashboard}
+          onError={setError}
+          onShiftClosed={logout}
+        />
       )}
 
       {tab === "reportes" && isAdmin && (
@@ -358,6 +521,8 @@ export function POSDashboard() {
           setReportTo={setReportTo}
           summary={reportSummary}
           utilization={utilization}
+          transactions={reportTransactions}
+          onSelectTransaction={setSelectedTransactionId}
           onLoad={loadReports}
           onExport={exportReports}
         />
@@ -376,10 +541,38 @@ export function POSDashboard() {
         />
       )}
 
-      {selectedAvailable && <ActivateModal machine={selectedAvailable} onCancel={() => setActivateMachineId(null)} onConfirm={activate} />}
+      {selectedAvailable && (
+        <ActivateModal machine={selectedAvailable} encargoOrders={encargoOrders} onCancel={() => setActivateMachineId(null)} onConfirm={activate} />
+      )}
 
       {selectedRunning && selectedRunning.transaction && (
-        <RunningModal machine={selectedRunning} onCancel={() => setRunningMachineId(null)} onAddTime={addTime} />
+        <RunningModal
+          machine={selectedRunning}
+          ticker={ticker}
+          onClose={() => setRunningMachineId(null)}
+          onAddTime={addTime}
+          onVoidTransaction={voidTransaction}
+          onReleaseMachine={releaseMachine}
+        />
+      )}
+
+      {selectedTransaction && (
+        <TransactionDetailModal
+          transaction={selectedTransaction}
+          onClose={() => setSelectedTransactionId(null)}
+          onVoid={voidTransaction}
+        />
+      )}
+
+      {showNewEncargo && (
+        <NewEncargoModal
+          employeeId={employee.id}
+          onClose={() => setShowNewEncargo(false)}
+          onCreated={async () => {
+            setShowNewEncargo(false);
+            await loadDashboard();
+          }}
+        />
       )}
 
       {showChangePin && (

@@ -1,0 +1,24 @@
+[Unit]
+Description=La Burbuja POS (Next.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mdares
+Group=mdares
+WorkingDirectory=/home/mdares/system
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStartPre=/bin/bash -lc 'export NVM_DIR=/home/mdares/.nvm; . "$NVM_DIR/nvm.sh"; nvm use 22 >/dev/null; npm run prisma:migrate:deploy'
+ExecStart=/bin/bash -lc 'export NVM_DIR=/home/mdares/.nvm; . "$NVM_DIR/nvm.sh"; nvm use 22 >/dev/null; npm run start'
+ExecStartPost=/bin/bash -lc 'for i in {1..30}; do curl -fsS "http://127.0.0.1:${PORT:-3000}/api/system/relay" >/dev/null && exit 0; sleep 1; done; exit 1'
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

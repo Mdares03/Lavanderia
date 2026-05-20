@@ -1,4 +1,6 @@
 export type ServiceType = "autoservicio" | "encargo" | "xl";
+export type PaymentMethod = "cash" | "card" | "transfer";
+export type TransactionStatus = "pending_relay" | "running" | "completed" | "relay_failed" | "voided";
 
 export type Machine = {
   id: string;
@@ -7,9 +9,12 @@ export type Machine = {
   relayChannel: number;
   defaultPriceCents: number;
   defaultDurationMinutes: number;
-  status: "available" | "running" | "out_of_service";
+  status: "available" | "running" | "finished" | "out_of_service";
   transaction: {
     id: string;
+    status: TransactionStatus;
+    isExtension: boolean;
+    parentTransactionId: string | null;
     ticketNumber: number;
     customerId: string;
     customerName: string;
@@ -22,9 +27,16 @@ export type Machine = {
     addonAmountCents: number;
     serviceType: ServiceType;
     amountCents: number;
-    paymentMethod: "cash" | "card" | "transfer";
+    paymentMethod: PaymentMethod;
+    originalDurationMinutes: number;
+    extensionMinutes: number;
+    extensionAmountCents: number;
     startedAt: string;
     expectedEndAt: string;
+    endedAt: string | null;
+    createdAt: string;
+    voidedAt: string | null;
+    voidReason: string | null;
     employeeId: string;
   } | null;
 };
@@ -71,8 +83,31 @@ export type ActiveShiftPayload = {
       totalSalesCents: number;
       expectedCashCents: number;
       transactionCount: number;
+      cashSalesCents: number;
+      depositsCents: number;
+      withdrawalsCents: number;
+      voidedCount: number;
+      voidedTotalCents: number;
       byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
+      voidedByEmployee: Array<{ employeeId: string; employeeName: string; count: number; amountCents: number }>;
     };
+    voidedTransactions: Array<{
+      id: string;
+      ticketNumber: number;
+      machineName: string;
+      amountCents: number;
+      reason: string | null;
+      voidedAt: string;
+      employeeName: string;
+    }>;
+    cashMovements: Array<{
+      id: string;
+      type: "deposit" | "withdrawal";
+      amountCents: number;
+      reason: string;
+      createdAt: string;
+      employeeName: string;
+    }>;
   } | null;
 };
 
@@ -81,6 +116,8 @@ export type ReportSummary = {
     totalRevenueCents: number;
     transactionCount: number;
     avgTicketCents: number;
+    voidedCount: number;
+    voidedTotalCents: number;
   };
   byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
   byMachine: Array<{ machineName: string; amountCents: number; count: number }>;
@@ -131,6 +168,101 @@ export type TicketPreviewData = {
   dateTimeIso: string;
   cashierName: string;
   machineName: string;
-  paymentMethod: "cash" | "card" | "transfer";
+  paymentMethod: PaymentMethod;
   relayOk: boolean;
+};
+
+export type DashboardTransaction = {
+  id: string;
+  ticketNumber: number;
+  status: TransactionStatus;
+  amountCents: number;
+  paymentMethod: PaymentMethod;
+  createdAt: string;
+  startedAt: string;
+  expectedEndAt: string;
+  endedAt: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+  serviceType: ServiceType;
+  isExtension: boolean;
+  parentTransactionId: string | null;
+  machine: {
+    name: string;
+  };
+  employee: {
+    name: string;
+  };
+  customer: {
+    firstName: string;
+    lastName: string;
+    phone: string;
+    email: string | null;
+  };
+  voidedByEmployee?: {
+    id: string;
+    name: string;
+  } | null;
+  parentTransaction?: {
+    id: string;
+    ticketNumber: number;
+  } | null;
+};
+
+export type ShiftHistoryItem = {
+  id: string;
+  startTime: string;
+  endTime: string | null;
+  expectedCashCents: number | null;
+  actualCashCents: number | null;
+  differenceCashCents: number | null;
+  employee: {
+    id: string;
+    name: string;
+  };
+  totals: {
+    totalSalesCents: number;
+    transactionCount: number;
+    byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
+    voidedCount: number;
+    voidedTotalCents: number;
+    depositsCents: number;
+    withdrawalsCents: number;
+  };
+};
+
+export type EncargoStatus = "recibido" | "lavando" | "secando" | "doblando" | "listo" | "entregado";
+
+export type EncargoOrder = {
+  id: string;
+  customerName: string | null;
+  customerPhone: string | null;
+  weightKg: number;
+  loads: number;
+  notes: string | null;
+  priceCents: number;
+  paymentMode: "now" | "pickup";
+  paymentStatus: "pending" | "paid";
+  paymentMethod: PaymentMethod | null;
+  status: EncargoStatus;
+  receivedAt: string;
+  readyAt: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdByEmployee: {
+    id: string;
+    name: string;
+  };
+  elapsedMinutes: number;
+  readyForHours: number;
+  activeMachines: Array<{
+    transactionId: string;
+    machineId: string;
+    machineName: string;
+    machineType: "washer" | "dryer";
+    startedAt: string;
+    expectedEndAt: string;
+    status: string;
+  }>;
 };

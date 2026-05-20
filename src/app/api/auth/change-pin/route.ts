@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
-import { loginWithPin } from "@/server/services/authService";
+import { ensurePinAvailable, loginWithPin } from "@/server/services/authService";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const schema = z.object({
@@ -24,6 +24,8 @@ export async function POST(request: Request) {
     if (payload.currentPin === payload.newPin && requester.id === payload.employeeId) {
       return fail("El nuevo PIN debe ser diferente al actual", 400);
     }
+
+    await ensurePinAvailable(payload.newPin, payload.employeeId);
 
     const employee = await prisma.employee.update({
       where: { id: payload.employeeId },

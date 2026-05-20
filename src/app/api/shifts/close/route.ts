@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/http";
-import { closeShift } from "@/server/services/shiftService";
+import { closeShift, getShiftSummary } from "@/server/services/shiftService";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const schema = z.object({
@@ -15,7 +15,8 @@ export async function POST(request: Request) {
   try {
     const payload = schema.parse(await request.json());
     const shift = await closeShift(payload);
-    return ok({ shift });
+    const summary = await getShiftSummary(shift.id);
+    return ok({ shift, summary });
   } catch (error) {
     return fail("No fue posible cerrar turno", 400, String(error));
   }

@@ -4,6 +4,14 @@ import { prisma } from "@/lib/db";
 import { CASH_MOVEMENT_TYPE, PAYMENT_METHODS, TRANSACTION_STATUS, type CashMovementTypeValue } from "@/server/domain/constants";
 import { calculateExpectedCash } from "@/server/services/calculations";
 
+const PAYMENT_METHOD_ORDER: Array<"cash" | "card" | "transfer"> = ["cash", "card", "transfer"];
+
+function emptyPaymentMap() {
+  return new Map<string, { paymentMethod: string; amountCents: number; count: number }>(
+    PAYMENT_METHOD_ORDER.map((paymentMethod) => [paymentMethod, { paymentMethod, amountCents: 0, count: 0 }])
+  );
+}
+
 export async function getActiveShift() {
   return prisma.shift.findFirst({
     where: { endTime: null },
@@ -113,7 +121,16 @@ export async function getShiftSummary(shiftId: string) {
   const shift = await prisma.shift.findUnique({
     where: { id: shiftId },
     include: {
-      cashMovements: true,
+      cashMovements: {
+        include: {
+          employee: {
+            select: { id: true, name: true }
+          }
+        },
+        orderBy: {
+          createdAt: "desc"
+        }
+      },
       employee: true
     }
   });
@@ -122,8 +139,7 @@ export async function getShiftSummary(shiftId: string) {
   }
 
   const end = shift.endTime ?? new Date();
-  const txStats = await prisma.transaction.groupBy({
-    by: ["paymentMethod"],
+  const nonVoidedTransactions = await prisma.transaction.findMany({
     where: {
       createdAt: {
         gte: shift.startTime,
@@ -133,11 +149,66 @@ export async function getShiftSummary(shiftId: string) {
         not: TRANSACTION_STATUS.voided
       }
     },
-    _sum: { amountCents: true },
-    _count: { _all: true }
+    select: {
+      id: true,
+      amountCents: true,
+      paymentMethod: true
+    }
   });
 
-  const totalSalesCents = txStats.reduce((sum, row) => sum + (row._sum.amountCents ?? 0), 0);
+  const voidedTransactions = await prisma.transaction.findMany({
+    where: {
+      status: TRANSACTION_STATUS.voided,
+      voidedAt: {
+        gte: shift.startTime,
+        lte: end
+      }
+    },
+    include: {
+      machine: {
+        select: { name: true }
+      },
+      voidedByEmployee: {
+        select: { id: true, name: true }
+      }
+    },
+    orderBy: {
+      voidedAt: "desc"
+    }
+  });
+
+  const paymentMap = emptyPaymentMap();
+  let totalSalesCents = 0;
+  for (const tx of nonVoidedTransactions) {
+    const entry = paymentMap.get(tx.paymentMethod) ?? { paymentMethod: tx.paymentMethod, amountCents: 0, count: 0 };
+    entry.amountCents += tx.amountCents;
+    entry.count += 1;
+    paymentMap.set(tx.paymentMethod, entry);
+    totalSalesCents += tx.amountCents;
+  }
+
+  const depositsCents = shift.cashMovements
+    .filter((row) => row.type === CASH_MOVEMENT_TYPE.deposit)
+    .reduce((sum, row) => sum + row.amountCents, 0);
+  const withdrawalsCents = shift.cashMovements
+    .filter((row) => row.type === CASH_MOVEMENT_TYPE.withdrawal)
+    .reduce((sum, row) => sum + row.amountCents, 0);
+
+  const voidedTotalCents = voidedTransactions.reduce((sum, row) => sum + row.amountCents, 0);
+  const voidedByEmployeeMap = new Map<string, { employeeId: string; employeeName: string; count: number; amountCents: number }>();
+  for (const tx of voidedTransactions) {
+    const key = tx.voidedByEmployee?.id ?? "unknown";
+    const current = voidedByEmployeeMap.get(key) ?? {
+      employeeId: tx.voidedByEmployee?.id ?? "unknown",
+      employeeName: tx.voidedByEmployee?.name ?? "Sin asignar",
+      count: 0,
+      amountCents: 0
+    };
+    current.count += 1;
+    current.amountCents += tx.amountCents;
+    voidedByEmployeeMap.set(key, current);
+  }
+
   const expectedCashCents = await calculateExpectedCashCents(shift.id);
 
   return {
@@ -145,18 +216,37 @@ export async function getShiftSummary(shiftId: string) {
     totals: {
       totalSalesCents,
       expectedCashCents,
-      transactionCount: txStats.reduce((sum, row) => sum + row._count._all, 0),
-      byPaymentMethod: txStats.map((row) => ({
-        paymentMethod: row.paymentMethod,
-        amountCents: row._sum.amountCents ?? 0,
-        count: row._count._all
-      }))
-    }
+      transactionCount: nonVoidedTransactions.length,
+      byPaymentMethod: Array.from(paymentMap.values()),
+      cashSalesCents: paymentMap.get(PAYMENT_METHODS.cash)?.amountCents ?? 0,
+      depositsCents,
+      withdrawalsCents,
+      voidedCount: voidedTransactions.length,
+      voidedTotalCents,
+      voidedByEmployee: Array.from(voidedByEmployeeMap.values()).sort((a, b) => b.count - a.count)
+    },
+    voidedTransactions: voidedTransactions.map((tx) => ({
+      id: tx.id,
+      ticketNumber: tx.ticketNumber,
+      machineName: tx.machine.name,
+      amountCents: tx.amountCents,
+      reason: tx.voidReason,
+      voidedAt: tx.voidedAt?.toISOString() ?? tx.updatedAt.toISOString(),
+      employeeName: tx.voidedByEmployee?.name ?? "Sin asignar"
+    })),
+    cashMovements: shift.cashMovements.map((movement) => ({
+      id: movement.id,
+      type: movement.type,
+      amountCents: movement.amountCents,
+      reason: movement.reason,
+      createdAt: movement.createdAt.toISOString(),
+      employeeName: movement.employee.name
+    }))
   };
 }
 
 export async function getShiftHistory(range: { from: Date; to: Date }) {
-  return prisma.shift.findMany({
+  const shifts = await prisma.shift.findMany({
     where: {
       startTime: {
         gte: range.from,
@@ -168,4 +258,71 @@ export async function getShiftHistory(range: { from: Date; to: Date }) {
     },
     orderBy: { startTime: "desc" }
   });
+
+  return Promise.all(
+    shifts.map(async (shift) => {
+      const end = shift.endTime ?? new Date();
+
+      const transactions = await prisma.transaction.findMany({
+        where: {
+          createdAt: {
+            gte: shift.startTime,
+            lte: end
+          },
+          status: {
+            not: TRANSACTION_STATUS.voided
+          }
+        },
+        select: {
+          amountCents: true,
+          paymentMethod: true
+        }
+      });
+
+      const paymentMap = emptyPaymentMap();
+      let totalSalesCents = 0;
+      for (const tx of transactions) {
+        const entry = paymentMap.get(tx.paymentMethod) ?? { paymentMethod: tx.paymentMethod, amountCents: 0, count: 0 };
+        entry.amountCents += tx.amountCents;
+        entry.count += 1;
+        paymentMap.set(tx.paymentMethod, entry);
+        totalSalesCents += tx.amountCents;
+      }
+
+      const voided = await prisma.transaction.aggregate({
+        _sum: { amountCents: true },
+        _count: { _all: true },
+        where: {
+          status: TRANSACTION_STATUS.voided,
+          voidedAt: {
+            gte: shift.startTime,
+            lte: end
+          }
+        }
+      });
+
+      const movementTotals = await prisma.cashMovement.groupBy({
+        by: ["type"],
+        _sum: { amountCents: true },
+        where: {
+          shiftId: shift.id
+        }
+      });
+      const depositsCents = movementTotals.find((row) => row.type === CASH_MOVEMENT_TYPE.deposit)?._sum.amountCents ?? 0;
+      const withdrawalsCents = movementTotals.find((row) => row.type === CASH_MOVEMENT_TYPE.withdrawal)?._sum.amountCents ?? 0;
+
+      return {
+        ...shift,
+        totals: {
+          totalSalesCents,
+          transactionCount: transactions.length,
+          byPaymentMethod: Array.from(paymentMap.values()),
+          voidedCount: voided._count._all,
+          voidedTotalCents: voided._sum.amountCents ?? 0,
+          depositsCents,
+          withdrawalsCents
+        }
+      };
+    })
+  );
 }

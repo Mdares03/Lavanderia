@@ -10,10 +10,13 @@ export type DashboardMachine = {
   relayChannel: number;
   defaultPriceCents: number;
   defaultDurationMinutes: number;
-  status: "available" | "running" | "out_of_service";
+  status: "available" | "running" | "finished" | "out_of_service";
   transaction: {
     id: string;
     ticketNumber: number;
+    status: string;
+    isExtension: boolean;
+    parentTransactionId: string | null;
     customerId: string;
     customerName: string;
     baseAmountCents: number;
@@ -26,8 +29,15 @@ export type DashboardMachine = {
     serviceType: "autoservicio" | "encargo" | "xl";
     amountCents: number;
     paymentMethod: "cash" | "card" | "transfer";
+    originalDurationMinutes: number;
+    extensionMinutes: number;
+    extensionAmountCents: number;
     startedAt: string;
     expectedEndAt: string;
+    endedAt: string | null;
+    createdAt: string;
+    voidedAt: string | null;
+    voidReason: string | null;
     employeeId: string;
   } | null;
 };
@@ -147,17 +157,28 @@ export async function getDashboardMachines(): Promise<DashboardMachine[]> {
       transactions: {
         where: {
           status: {
-            in: [TRANSACTION_STATUS.running, TRANSACTION_STATUS.pendingRelay]
+            in: [
+              TRANSACTION_STATUS.running,
+              TRANSACTION_STATUS.pendingRelay,
+              TRANSACTION_STATUS.completed,
+              TRANSACTION_STATUS.voided
+            ]
           }
         },
         orderBy: { createdAt: "desc" },
-        take: 1,
+        take: 5,
         include: {
           customer: {
             select: {
               id: true,
               firstName: true,
               lastName: true
+            }
+          },
+          extensions: {
+            select: {
+              extraMinutes: true,
+              extraAmountCents: true
             }
           }
         }
@@ -166,13 +187,35 @@ export async function getDashboardMachines(): Promise<DashboardMachine[]> {
   });
 
   return machines.map((machine) => {
-    const runningTransaction = machine.transactions.at(0);
+    const runningTransaction = machine.transactions.find(
+      (tx) => tx.status === TRANSACTION_STATUS.running || tx.status === TRANSACTION_STATUS.pendingRelay
+    );
+    const latestFinalized = machine.transactions.find(
+      (tx) => tx.status === TRANSACTION_STATUS.completed || tx.status === TRANSACTION_STATUS.voided
+    );
+    const selectedTransaction = runningTransaction ?? (machine.awaitingRelease ? latestFinalized : undefined);
     const machineType = machine.type === "dryer" ? "dryer" : "washer";
     const status = machine.outOfService
       ? "out_of_service"
       : runningTransaction
         ? "running"
-        : "available";
+        : machine.awaitingRelease
+          ? "finished"
+          : "available";
+
+    const extensionMinutes = selectedTransaction
+      ? selectedTransaction.extensions.reduce((sum, row) => sum + row.extraMinutes, 0)
+      : 0;
+    const extensionAmountCents = selectedTransaction
+      ? selectedTransaction.extensions.reduce((sum, row) => sum + row.extraAmountCents, 0)
+      : 0;
+    const totalDurationMinutes = selectedTransaction
+      ? Math.max(
+          1,
+          Math.ceil((selectedTransaction.expectedEndAt.getTime() - selectedTransaction.startedAt.getTime()) / 60_000)
+        )
+      : 1;
+    const originalDurationMinutes = Math.max(1, totalDurationMinutes - extensionMinutes);
 
     return {
       id: machine.id,
@@ -182,35 +225,45 @@ export async function getDashboardMachines(): Promise<DashboardMachine[]> {
       defaultPriceCents: machine.defaultPriceCents,
       defaultDurationMinutes: machine.defaultDurationMinutes,
       status,
-      transaction: runningTransaction
+      transaction: selectedTransaction
         ? {
-            id: runningTransaction.id,
-            ticketNumber: runningTransaction.ticketNumber,
-            customerId: runningTransaction.customerId,
-            customerName: `${runningTransaction.customer.firstName} ${runningTransaction.customer.lastName}`.trim(),
-            baseAmountCents: runningTransaction.baseAmountCents,
-            discountCents: runningTransaction.discountCents,
-            loyaltyDiscountApplied: runningTransaction.loyaltyDiscountApplied,
-            addonDetergentQty: runningTransaction.addonDetergentQty,
-            addonSoftenerQty: runningTransaction.addonSoftenerQty,
-            addonBleachQty: runningTransaction.addonBleachQty,
-            addonAmountCents: runningTransaction.addonAmountCents,
+            id: selectedTransaction.id,
+            ticketNumber: selectedTransaction.ticketNumber,
+            status: selectedTransaction.status,
+            isExtension: selectedTransaction.isExtension,
+            parentTransactionId: selectedTransaction.parentTransactionId,
+            customerId: selectedTransaction.customerId,
+            customerName: `${selectedTransaction.customer.firstName} ${selectedTransaction.customer.lastName}`.trim(),
+            baseAmountCents: selectedTransaction.baseAmountCents,
+            discountCents: selectedTransaction.discountCents,
+            loyaltyDiscountApplied: selectedTransaction.loyaltyDiscountApplied,
+            addonDetergentQty: selectedTransaction.addonDetergentQty,
+            addonSoftenerQty: selectedTransaction.addonSoftenerQty,
+            addonBleachQty: selectedTransaction.addonBleachQty,
+            addonAmountCents: selectedTransaction.addonAmountCents,
             serviceType:
-              runningTransaction.serviceType === "encargo"
+              selectedTransaction.serviceType === "encargo"
                 ? "encargo"
-                : runningTransaction.serviceType === "xl"
+                : selectedTransaction.serviceType === "xl"
                   ? "xl"
                   : "autoservicio",
-            amountCents: runningTransaction.amountCents,
+            amountCents: selectedTransaction.amountCents,
             paymentMethod:
-              runningTransaction.paymentMethod === "card"
+              selectedTransaction.paymentMethod === "card"
                 ? "card"
-                : runningTransaction.paymentMethod === "transfer"
+                : selectedTransaction.paymentMethod === "transfer"
                   ? "transfer"
                   : "cash",
-            startedAt: runningTransaction.startedAt.toISOString(),
-            expectedEndAt: runningTransaction.expectedEndAt.toISOString(),
-            employeeId: runningTransaction.employeeId
+            originalDurationMinutes,
+            extensionMinutes,
+            extensionAmountCents,
+            startedAt: selectedTransaction.startedAt.toISOString(),
+            expectedEndAt: selectedTransaction.expectedEndAt.toISOString(),
+            endedAt: selectedTransaction.endedAt?.toISOString() ?? null,
+            createdAt: selectedTransaction.createdAt.toISOString(),
+            voidedAt: selectedTransaction.voidedAt?.toISOString() ?? null,
+            voidReason: selectedTransaction.voidReason,
+            employeeId: selectedTransaction.employeeId
           }
         : null
     };
@@ -231,6 +284,34 @@ export async function updateMachineConfig(
   return prisma.machine.update({
     where: { id: machineId },
     data: input
+  });
+}
+
+export async function releaseMachine(machineId: string) {
+  const machine = await prisma.machine.findUnique({
+    where: { id: machineId },
+    include: {
+      transactions: {
+        where: {
+          status: {
+            in: [TRANSACTION_STATUS.running, TRANSACTION_STATUS.pendingRelay]
+          }
+        },
+        take: 1
+      }
+    }
+  });
+
+  if (!machine) {
+    throw new Error("Maquina no encontrada");
+  }
+  if (machine.transactions.length > 0) {
+    throw new Error("No se puede liberar una maquina en marcha");
+  }
+
+  return prisma.machine.update({
+    where: { id: machineId },
+    data: { awaitingRelease: false }
   });
 }
 

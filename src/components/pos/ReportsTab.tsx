@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReportSummary, UtilizationRow } from "@/components/pos/types";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDateTime } from "@/lib/format";
+import type { DashboardTransaction } from "@/components/pos/types";
 
 type ReportsTabProps = {
   reportFrom: string;
@@ -10,6 +11,8 @@ type ReportsTabProps = {
   setReportTo: (value: string) => void;
   summary: ReportSummary | null;
   utilization: UtilizationRow[];
+  transactions: DashboardTransaction[];
+  onSelectTransaction: (transactionId: string) => void;
   onLoad: () => Promise<void>;
   onExport: () => Promise<void>;
 };
@@ -21,6 +24,8 @@ export function ReportsTab({
   setReportTo,
   summary,
   utilization,
+  transactions,
+  onSelectTransaction,
   onLoad,
   onExport
 }: ReportsTabProps) {
@@ -57,6 +62,9 @@ export function ReportsTab({
             <p>Total: {formatCurrency(summary.totals.totalRevenueCents)}</p>
             <p>Transacciones: {summary.totals.transactionCount}</p>
             <p>Ticket promedio: {formatCurrency(summary.totals.avgTicketCents)}</p>
+          </div>
+          <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            Anuladas: {summary.totals.voidedCount} ({formatCurrency(summary.totals.voidedTotalCents)}) - no incluidas en total.
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div>
@@ -95,6 +103,50 @@ export function ReportsTab({
           </ul>
         </article>
       )}
+
+      <article className="rounded-2xl bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-900">Historial de transacciones</h2>
+        <p className="mt-1 text-xs text-slate-500">Incluye activas, completadas y anuladas (marcadas).</p>
+        <div className="mt-3 max-h-80 overflow-y-auto rounded-xl border border-slate-200">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-100 text-slate-700">
+              <tr>
+                <th className="px-3 py-2">Hora</th>
+                <th className="px-3 py-2">Maquina</th>
+                <th className="px-3 py-2">Pago</th>
+                <th className="px-3 py-2">Estatus</th>
+                <th className="px-3 py-2">Monto</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((tx) => (
+                <tr key={tx.id} className="border-t border-slate-100">
+                  <td className="px-3 py-2">{formatDateTime(tx.createdAt)}</td>
+                  <td className="px-3 py-2">{tx.machine.name}</td>
+                  <td className="px-3 py-2">{tx.paymentMethod}</td>
+                  <td className="px-3 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tx.status === "voided" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-700"}`}>
+                      {tx.status}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <button onClick={() => onSelectTransaction(tx.id)} className="font-semibold text-teal-700 underline">
+                      {formatCurrency(tx.amountCents)}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {transactions.length === 0 && (
+                <tr>
+                  <td className="px-3 py-2 text-slate-500" colSpan={5}>
+                    Sin transacciones en el rango.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
   );
 }

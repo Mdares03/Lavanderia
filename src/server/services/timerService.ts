@@ -117,7 +117,12 @@ class TimerService {
           status: TRANSACTION_STATUS.completed,
           endedAt: new Date(),
           relayTurnedOffAt: new Date(),
-          relayFailureReason: null
+          relayFailureReason: null,
+          machine: {
+            update: {
+              awaitingRelease: true
+            }
+          }
         }
       });
       this.unschedule(tx.id);

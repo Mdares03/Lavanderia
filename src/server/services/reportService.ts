@@ -32,6 +32,18 @@ export async function getReportSummary(range: ReportRange) {
   const transactionCount = transactions.length;
   const avgTicketCents = transactionCount > 0 ? Math.round(totalRevenueCents / transactionCount) : 0;
 
+  const voided = await prisma.transaction.aggregate({
+    _count: { _all: true },
+    _sum: { amountCents: true },
+    where: {
+      status: TRANSACTION_STATUS.voided,
+      voidedAt: {
+        gte: range.from,
+        lte: range.to
+      }
+    }
+  });
+
   const paymentMap = new Map<string, { amountCents: number; count: number }>();
   const machineMap = new Map<string, { machineId: string; machineName: string; amountCents: number; count: number }>();
 
@@ -57,7 +69,9 @@ export async function getReportSummary(range: ReportRange) {
     totals: {
       totalRevenueCents,
       transactionCount,
-      avgTicketCents
+      avgTicketCents,
+      voidedCount: voided._count._all,
+      voidedTotalCents: voided._sum.amountCents ?? 0
     },
     byPaymentMethod: Array.from(paymentMap.entries()).map(([paymentMethod, value]) => ({
       paymentMethod,
@@ -128,7 +142,9 @@ export async function getReportCsv(range: ReportRange) {
     "Tipo,Clave,Valor1,Valor2",
     `totales,totalRevenueCents,${summary.totals.totalRevenueCents},`,
     `totales,transactionCount,${summary.totals.transactionCount},`,
-    `totales,avgTicketCents,${summary.totals.avgTicketCents},`
+    `totales,avgTicketCents,${summary.totals.avgTicketCents},`,
+    `totales,voidedCount,${summary.totals.voidedCount},`,
+    `totales,voidedTotalCents,${summary.totals.voidedTotalCents},`
   ];
 
   for (const row of summary.byPaymentMethod) {

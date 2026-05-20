@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
-import { requireAdminFromRequest } from "@/server/services/authService";
+import { ensurePinAvailable, requireAdminFromRequest } from "@/server/services/authService";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const createSchema = z.object({
@@ -30,6 +30,7 @@ export async function POST(request: Request) {
   try {
     await requireAdminFromRequest(request);
     const payload = createSchema.parse(await request.json());
+    await ensurePinAvailable(payload.pin);
     const employee = await prisma.employee.create({
       data: payload
     });

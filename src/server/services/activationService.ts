@@ -2,8 +2,14 @@ import "server-only";
 
 import { addMinutes } from "@/lib/time";
 import { prisma } from "@/lib/db";
-import { TRANSACTION_STATUS, type PaymentMethodValue, type ServiceTypeValue } from "@/server/domain/constants";
+import {
+  ENCARGO_ORDER_STATUS,
+  TRANSACTION_STATUS,
+  type PaymentMethodValue,
+  type ServiceTypeValue
+} from "@/server/domain/constants";
 import { relayManager } from "@/server/relay/relayManager";
+import { loginWithPin } from "@/server/services/authService";
 import { calculateAddonTotalCents, calculateLoyaltyDiscountCents } from "@/server/services/calculations";
 import { timerService } from "@/server/services/timerService";
 
@@ -21,6 +27,7 @@ export type ActivateMachineInput = {
   durationMinutes: number;
   serviceType: ServiceTypeValue;
   paymentMethod: PaymentMethodValue;
+  encargoOrderId?: string;
   addons: ActivateMachineAddonsInput;
 };
 
@@ -49,6 +56,10 @@ export async function activateMachine(input: ActivateMachineInput) {
 
     if (machine.outOfService) {
       throw new Error("Maquina fuera de servicio");
+    }
+
+    if (machine.awaitingRelease) {
+      throw new Error("La maquina tiene ciclo terminado. Libera la maquina antes de reactivar.");
     }
 
     if (machine.transactions.length > 0) {
@@ -129,11 +140,32 @@ export async function activateMachine(input: ActivateMachineInput) {
         serviceType: input.serviceType,
         amountCents,
         paymentMethod: input.paymentMethod,
+        encargoOrderId: input.encargoOrderId,
         startedAt,
         expectedEndAt,
         status: TRANSACTION_STATUS.pendingRelay
       }
     });
+
+    if (input.encargoOrderId) {
+      const encargoOrder = await tx.encargoOrder.findUnique({
+        where: { id: input.encargoOrderId },
+        select: { id: true, status: true }
+      });
+
+      if (!encargoOrder) {
+        throw new Error("Encargo no encontrado");
+      }
+      if (encargoOrder.status === ENCARGO_ORDER_STATUS.entregado) {
+        throw new Error("No se puede activar maquina para un encargo entregado");
+      }
+
+      const nextStatus = machine.type === "dryer" ? ENCARGO_ORDER_STATUS.secando : ENCARGO_ORDER_STATUS.lavando;
+      await tx.encargoOrder.update({
+        where: { id: encargoOrder.id },
+        data: { status: nextStatus }
+      });
+    }
 
     return {
       machineRelayChannel: machine.relayChannel,
@@ -238,10 +270,22 @@ export async function addTimeToTransaction(input: {
   employeeId: string;
   extraMinutes: number;
   extraAmountCents: number;
+  paymentMethod: PaymentMethodValue;
   reason?: string;
 }) {
+  const employee = await prisma.employee.findUnique({
+    where: { id: input.employeeId },
+    select: { id: true, isActive: true }
+  });
+  if (!employee || !employee.isActive) {
+    throw new Error("Empleado no valido");
+  }
+
   const transaction = await prisma.transaction.findUnique({
-    where: { id: input.transactionId }
+    where: { id: input.transactionId },
+    include: {
+      machine: true
+    }
   });
 
   if (!transaction) {
@@ -253,30 +297,70 @@ export async function addTimeToTransaction(input: {
   }
 
   const nextEnd = addMinutes(transaction.expectedEndAt, input.extraMinutes);
-  const updated = await prisma.transaction.update({
-    where: { id: transaction.id },
-    data: {
-      expectedEndAt: nextEnd,
-      amountCents: transaction.amountCents + input.extraAmountCents,
-      baseAmountCents: transaction.baseAmountCents + input.extraAmountCents
-    }
-  });
+  const now = new Date();
 
-  await prisma.transactionExtension.create({
-    data: {
-      transactionId: transaction.id,
-      employeeId: input.employeeId,
-      extraMinutes: input.extraMinutes,
-      extraAmountCents: input.extraAmountCents,
-      reason: input.reason
-    }
+  const updated = await prisma.$transaction(async (tx) => {
+    const ticketAgg = await tx.transaction.aggregate({
+      _max: { ticketNumber: true }
+    });
+    const extensionTicketNumber = (ticketAgg._max.ticketNumber ?? 0) + 1;
+
+    await tx.transaction.create({
+      data: {
+        ticketNumber: extensionTicketNumber,
+        machineId: transaction.machineId,
+        employeeId: input.employeeId,
+        customerId: transaction.customerId,
+        baseAmountCents: input.extraAmountCents,
+        discountCents: 0,
+        loyaltyDiscountApplied: false,
+        addonDetergentQty: 0,
+        addonSoftenerQty: 0,
+        addonBleachQty: 0,
+        addonAmountCents: 0,
+        serviceType: transaction.serviceType,
+        amountCents: input.extraAmountCents,
+        paymentMethod: input.paymentMethod,
+        isExtension: true,
+        parentTransactionId: transaction.id,
+        encargoOrderId: transaction.encargoOrderId,
+        startedAt: now,
+        expectedEndAt: now,
+        status: TRANSACTION_STATUS.completed,
+        endedAt: now
+      }
+    });
+
+    const next = await tx.transaction.update({
+      where: { id: transaction.id },
+      data: {
+        expectedEndAt: nextEnd
+      }
+    });
+
+    await tx.transactionExtension.create({
+      data: {
+        transactionId: transaction.id,
+        employeeId: input.employeeId,
+        extraMinutes: input.extraMinutes,
+        extraAmountCents: input.extraAmountCents,
+        reason: input.reason
+      }
+    });
+
+    return next;
   });
 
   timerService.scheduleExpiry(updated.id, updated.expectedEndAt);
   return updated;
 }
 
-export async function voidTransaction(input: { transactionId: string; reason: string }) {
+export async function voidTransaction(input: {
+  transactionId: string;
+  reason: string;
+  employeeId: string;
+  adminPin?: string;
+}) {
   const transaction = await prisma.transaction.findUnique({
     where: { id: input.transactionId },
     include: { machine: true }
@@ -290,18 +374,55 @@ export async function voidTransaction(input: { transactionId: string; reason: st
     return transaction;
   }
 
+  const employee = await prisma.employee.findUnique({
+    where: { id: input.employeeId },
+    select: { id: true, isAdmin: true, isActive: true }
+  });
+  if (!employee || !employee.isActive) {
+    throw new Error("Empleado no valido");
+  }
+
+  const ageMs = Date.now() - transaction.createdAt.getTime();
+  const tenMinutesMs = 10 * 60_000;
+  if (ageMs > tenMinutesMs && !employee.isAdmin) {
+    if (!input.adminPin) {
+      throw new Error("PIN admin requerido para anular transacciones de mas de 10 minutos");
+    }
+    const adminEmployee = await loginWithPin(input.adminPin);
+    if (!adminEmployee.isAdmin) {
+      throw new Error("PIN admin requerido para anular transacciones de mas de 10 minutos");
+    }
+  }
+
   if (transaction.status === TRANSACTION_STATUS.running) {
+    await prisma.transaction.update({
+      where: { id: transaction.id },
+      data: {
+        relayOffAttemptedAt: new Date()
+      }
+    });
     await relayManager.turnOff(transaction.machine.relayChannel);
   }
   timerService.unschedule(transaction.id);
 
-  return prisma.transaction.update({
+  const updated = await prisma.transaction.update({
     where: { id: transaction.id },
     data: {
       status: TRANSACTION_STATUS.voided,
       voidReason: input.reason,
+      voidedAt: new Date(),
+      voidedByEmployeeId: employee.id,
       endedAt: new Date(),
-      relayTurnedOffAt: new Date()
+      relayTurnedOffAt: transaction.status === TRANSACTION_STATUS.running ? new Date() : transaction.relayTurnedOffAt
     }
   });
+
+  if (transaction.status === TRANSACTION_STATUS.running) {
+    await prisma.machine.update({
+      where: { id: transaction.machineId },
+      data: { awaitingRelease: false }
+    });
+  }
+
+  return updated;
 }

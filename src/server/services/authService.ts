@@ -3,18 +3,42 @@ import "server-only";
 import { prisma } from "@/lib/db";
 
 export async function loginWithPin(pin: string) {
-  const employee = await prisma.employee.findFirst({
+  const matches = await prisma.employee.findMany({
     where: {
       pin,
       isActive: true
+    },
+    orderBy: {
+      createdAt: "asc"
     }
   });
 
-  if (!employee) {
+  if (matches.length === 0) {
     throw new Error("PIN invalido");
   }
 
-  return employee;
+  if (matches.length > 1) {
+    throw new Error("PIN duplicado detectado. Solicita a un administrador actualizarlo.");
+  }
+
+  return matches[0];
+}
+
+export async function ensurePinAvailable(pin: string, excludeEmployeeId?: string) {
+  const existing = await prisma.employee.findFirst({
+    where: {
+      pin,
+      isActive: true,
+      ...(excludeEmployeeId ? { id: { not: excludeEmployeeId } } : {})
+    },
+    select: {
+      id: true
+    }
+  });
+
+  if (existing) {
+    throw new Error("PIN ya en uso por otro empleado activo");
+  }
 }
 
 export function getAdminPinFromRequest(request: Request) {

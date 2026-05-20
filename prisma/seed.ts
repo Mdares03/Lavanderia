@@ -26,10 +26,14 @@ async function main() {
 
   await prisma.employee.upsert({
     where: { id: "admin-default" },
-    update: {},
+    update: {
+      name: "Marcelo Dares",
+      isAdmin: true,
+      isActive: true
+    },
     create: {
       id: "admin-default",
-      name: "Administrador",
+      name: "Marcelo Dares",
       pin: "1234",
       isAdmin: true
     }

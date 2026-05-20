@@ -16,6 +16,7 @@ model Machine {
   defaultPriceCents      Int
   defaultDurationMinutes Int
   outOfService           Boolean       @default(false)
+  awaitingRelease        Boolean       @default(false)
   isActive               Boolean       @default(true)
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
@@ -32,8 +33,10 @@ model Employee {
   updatedAt     DateTime       @updatedAt
   shifts        Shift[]
   transactions  Transaction[]
+  voidedTransactions Transaction[] @relation("TransactionVoidedBy")
   cashMovements CashMovement[]
   extensions    TransactionExtension[]
+  encargoOrders EncargoOrder[] @relation("EncargoOrderCreatedBy")
 }
 
 model Customer {
@@ -69,10 +72,19 @@ model Transaction {
   serviceType            String                 @default("autoservicio")
   amountCents            Int
   paymentMethod          String
+  isExtension            Boolean                @default(false)
+  parentTransactionId    String?
+  parentTransaction      Transaction?           @relation("TransactionParent", fields: [parentTransactionId], references: [id])
+  childTransactions      Transaction[]          @relation("TransactionParent")
+  encargoOrderId         String?
+  encargoOrder           EncargoOrder?          @relation(fields: [encargoOrderId], references: [id])
   startedAt              DateTime
   expectedEndAt          DateTime
   status                 String                 @default("pending_relay")
   endedAt                DateTime?
+  voidedAt               DateTime?
+  voidedByEmployeeId     String?
+  voidedByEmployee       Employee?              @relation("TransactionVoidedBy", fields: [voidedByEmployeeId], references: [id])
   relayOnAttemptedAt     DateTime?
   relayTurnedOnAt        DateTime?
   relayOffAttemptedAt    DateTime?
@@ -86,6 +98,9 @@ model Transaction {
   @@index([expectedEndAt])
   @@index([status])
   @@index([customerId])
+  @@index([parentTransactionId])
+  @@index([encargoOrderId])
+  @@index([voidedAt])
 }
 
 model TransactionExtension {
@@ -159,4 +174,30 @@ model AppConfig {
   loyaltyEveryNTransactions    Int      @default(10)
   loyaltyDiscountPct           Int      @default(50)
   updatedAt                   DateTime @updatedAt
+}
+
+model EncargoOrder {
+  id                String        @id @default(cuid())
+  customerName      String?
+  customerPhone     String?
+  weightKg          Float
+  loads             Int           @default(1)
+  notes             String?
+  priceCents        Int
+  paymentMode       String
+  paymentStatus     String        @default("pending")
+  paymentMethod     String?
+  status            String        @default("recibido")
+  createdByEmployeeId String
+  createdByEmployee Employee      @relation("EncargoOrderCreatedBy", fields: [createdByEmployeeId], references: [id])
+  receivedAt        DateTime      @default(now())
+  readyAt           DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  transactions      Transaction[]
+
+  @@index([status])
+  @@index([receivedAt])
+  @@index([createdByEmployeeId])
 }

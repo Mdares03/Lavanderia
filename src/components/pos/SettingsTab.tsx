@@ -18,6 +18,7 @@ type SettingsTabProps = {
 export function SettingsTab({ employee, adminPin, machines, employees, onRefresh, onError }: SettingsTabProps) {
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeePin, setNewEmployeePin] = useState("");
+  const [newEmployeeIsAdmin, setNewEmployeeIsAdmin] = useState(false);
   const [serialPath, setSerialPath] = useState("COM3");
   const [serialBaudRate, setSerialBaudRate] = useState(9600);
   const [mockMode, setMockMode] = useState(true);
@@ -29,6 +30,9 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [customersLoading, setCustomersLoading] = useState(false);
   const [showMachineList, setShowMachineList] = useState(false);
+  const [testingMachineId, setTestingMachineId] = useState<string | null>(null);
+  const [testingAllRelays, setTestingAllRelays] = useState(false);
+  const [relayTestFeedback, setRelayTestFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     if (machines.length === 0) {
@@ -160,6 +164,30 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
           Guardar
         </button>
       </div>
+      <div className="mt-2">
+        <button
+          onClick={async () => {
+            setTestingMachineId(machine.id);
+            try {
+              await apiFetch(`/api/machines/${machine.id}/test-relay`, {
+                method: "POST",
+                headers: {
+                  "x-admin-pin": adminPin
+                }
+              });
+              setRelayTestFeedback(`Relay OK en ${machine.name}`);
+            } catch (error) {
+              onError(error instanceof Error ? error.message : "No fue posible probar relay");
+            } finally {
+              setTestingMachineId(null);
+            }
+          }}
+          className="rounded-lg bg-indigo-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+          disabled={testingMachineId === machine.id || testingAllRelays}
+        >
+          {testingMachineId === machine.id ? "Probando relay..." : "Probar relay"}
+        </button>
+      </div>
     </li>
   );
 
@@ -234,13 +262,47 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
         </div>
         <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
           <p className="text-xs text-slate-600">Lista individual de maquinas</p>
-          <button
-            onClick={() => setShowMachineList((current) => !current)}
-            className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white"
-          >
-            {showMachineList ? "Ocultar lista" : `Mostrar lista (${machines.length})`}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={async () => {
+                setTestingAllRelays(true);
+                setRelayTestFeedback(null);
+                try {
+                  const payload = await apiFetch<{
+                    count: number;
+                    results: Array<{ machineId: string; machineName: string; success: boolean; error?: string }>;
+                  }>("/api/machines/test-all-relays", {
+                    method: "POST",
+                    headers: {
+                      "x-admin-pin": adminPin
+                    }
+                  });
+                  const fails = payload.results.filter((row) => !row.success);
+                  if (fails.length > 0) {
+                    onError(`Prueba completa con fallas: ${fails.map((item) => item.machineName).join(", ")}`);
+                  } else {
+                    setRelayTestFeedback(`Prueba completa OK: ${payload.count} maquinas`);
+                  }
+                } catch (error) {
+                  onError(error instanceof Error ? error.message : "No fue posible probar todos los relays");
+                } finally {
+                  setTestingAllRelays(false);
+                }
+              }}
+              className="rounded-lg bg-indigo-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+              disabled={testingAllRelays || testingMachineId !== null}
+            >
+              {testingAllRelays ? "Probando..." : "Probar TODAS"}
+            </button>
+            <button
+              onClick={() => setShowMachineList((current) => !current)}
+              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              {showMachineList ? "Ocultar lista" : `Mostrar lista (${machines.length})`}
+            </button>
+          </div>
         </div>
+        {relayTestFeedback && <p className="mt-2 text-xs font-semibold text-emerald-700">{relayTestFeedback}</p>}
         {showMachineList && (
           <div className="mt-3 grid gap-3 text-sm">
             <details className="rounded-xl border border-slate-200 bg-white p-3" open>
@@ -260,7 +322,68 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
         <ul className="mt-3 grid gap-2 text-sm">
           {employees.map((item) => (
             <li key={item.id} className="rounded-lg bg-slate-100 px-3 py-2">
-              {item.name} {item.isAdmin ? "(admin)" : ""}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  {item.name} {item.isAdmin ? "(admin)" : "(empleado)"}
+                </span>
+                {employee.isAdmin && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={async () => {
+                        const rawPin = window.prompt(`Nuevo PIN para ${item.name} (4 digitos)`, "");
+                        if (rawPin === null) {
+                          return;
+                        }
+                        const nextPin = rawPin.trim();
+                        if (!/^\d{4}$/.test(nextPin)) {
+                          onError("El PIN debe tener exactamente 4 digitos");
+                          return;
+                        }
+                        try {
+                          await apiFetch(`/api/settings/employees/${item.id}`, {
+                            method: "PATCH",
+                            headers: {
+                              "x-admin-pin": adminPin
+                            },
+                            body: JSON.stringify({
+                              pin: nextPin
+                            })
+                          });
+                          await onRefresh();
+                        } catch (error) {
+                          onError(error instanceof Error ? error.message : "No fue posible actualizar PIN");
+                        }
+                      }}
+                      className="rounded-lg bg-slate-700 px-3 py-1 text-xs font-semibold text-white"
+                    >
+                      Cambiar PIN
+                    </button>
+                    {item.id !== employee.id && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await apiFetch(`/api/settings/employees/${item.id}`, {
+                              method: "PATCH",
+                              headers: {
+                                "x-admin-pin": adminPin
+                              },
+                              body: JSON.stringify({
+                                isAdmin: !item.isAdmin
+                              })
+                            });
+                            await onRefresh();
+                          } catch (error) {
+                            onError(error instanceof Error ? error.message : "No fue posible actualizar rol");
+                          }
+                        }}
+                        className={`rounded-lg px-3 py-1 text-xs font-semibold text-white ${item.isAdmin ? "bg-amber-700" : "bg-indigo-700"}`}
+                      >
+                        {item.isAdmin ? "Quitar admin" : "Hacer admin"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -278,6 +401,14 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
               className="rounded-xl border border-slate-300 px-3 py-2"
               placeholder="PIN 4 digitos"
             />
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={newEmployeeIsAdmin}
+                onChange={(event) => setNewEmployeeIsAdmin(event.target.checked)}
+              />
+              Crear como administrador
+            </label>
             <button
               onClick={async () => {
                 try {
@@ -289,11 +420,12 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
                     body: JSON.stringify({
                       name: newEmployeeName,
                       pin: newEmployeePin,
-                      isAdmin: false
+                      isAdmin: newEmployeeIsAdmin
                     })
                   });
                   setNewEmployeeName("");
                   setNewEmployeePin("");
+                  setNewEmployeeIsAdmin(false);
                   await onRefresh();
                 } catch (error) {
                   onError(error instanceof Error ? error.message : "No fue posible crear empleado");
@@ -301,7 +433,7 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
               }}
               className="rounded-xl bg-teal-700 px-4 py-2 font-semibold text-white"
             >
-              Agregar empleado
+              Agregar persona
             </button>
           </div>
         )}
