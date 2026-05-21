@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { TRANSACTION_STATUS } from "@/server/domain/constants";
 import { relayManager } from "@/server/relay/relayManager";
-import { ensureDefaultMachineCombos } from "@/server/services/machineService";
+import { ensureInitialMachineCatalogSeed } from "@/server/services/machineService";
 import { timerService } from "@/server/services/timerService";
 
 class RecoveryService {
@@ -17,7 +17,7 @@ class RecoveryService {
     this.restored = true;
 
     await relayManager.init();
-    await ensureDefaultMachineCombos();
+    await ensureInitialMachineCatalogSeed();
     await timerService.bootstrap();
 
     const now = new Date();
@@ -34,7 +34,9 @@ class RecoveryService {
         continue;
       }
       try {
-        await relayManager.turnOn(transaction.machine.relayChannel);
+        if (transaction.machine.relayChannel !== null) {
+          await relayManager.turnOn(transaction.machine.relayChannel);
+        }
       } catch (error) {
         logger.warn("No se pudo reactivar relay en recuperacion", {
           transactionId: transaction.id,

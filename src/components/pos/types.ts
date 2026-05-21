@@ -6,10 +6,24 @@ export type Machine = {
   id: string;
   name: string;
   type: "washer" | "dryer";
+  size: "normal" | "xl";
   relayChannel: number;
   defaultPriceCents: number;
   defaultDurationMinutes: number;
-  status: "available" | "running" | "finished" | "out_of_service";
+  status: "available" | "running" | "finished" | "out_of_service" | "pending_hardware";
+  hardware: {
+    enabled: boolean;
+    backend: "i2c" | "modbus" | "pending";
+    state: boolean | null;
+    ready: boolean;
+    error?: string;
+  };
+  relayTest: {
+    lastRelayTestOk: boolean | null;
+    lastRelayTestAt: string | null;
+    lastRelayTestError: string | null;
+    hardwareValidatedAt: string | null;
+  };
   transaction: {
     id: string;
     status: TransactionStatus;
@@ -41,6 +55,33 @@ export type Machine = {
   } | null;
 };
 
+export type AdminMachine = {
+  id: string;
+  name: string;
+  type: "washer" | "dryer";
+  size: "normal" | "xl";
+  relayChannel: number | null;
+  defaultPriceCents: number;
+  defaultDurationMinutes: number;
+  outOfService: boolean;
+  isActive: boolean;
+  awaitingRelease: boolean;
+  status: "available" | "running" | "finished" | "out_of_service" | "pending_hardware";
+  hardware: {
+    enabled: boolean;
+    backend: "i2c" | "modbus" | "pending";
+    state: boolean | null;
+    ready: boolean;
+    error?: string;
+  };
+  relayTest: {
+    lastRelayTestOk: boolean | null;
+    lastRelayTestAt: string | null;
+    lastRelayTestError: string | null;
+    hardwareValidatedAt: string | null;
+  };
+};
+
 export type CustomerRecord = {
   id: string;
   firstName: string;
@@ -62,8 +103,24 @@ export type LoyaltyRule = {
 
 export type RelayHealth = {
   connected: boolean;
-  mode: "mock" | "serial";
+  mode: "mock" | "http";
   error?: string;
+};
+
+export type RelayChannelConfig = {
+  channel: number;
+  label: string;
+  enabled: boolean;
+  backend: "i2c" | "modbus" | "pending";
+  board?: number;
+  addr?: number;
+  relay?: number;
+};
+
+export type RelayChannelConfigUpdate = {
+  channel: number;
+  label?: string;
+  enabled?: boolean;
 };
 
 export type Employee = {
@@ -132,6 +189,10 @@ export type UtilizationRow = {
 };
 
 export type PricingVariables = {
+  washerNormalCycleMinutes: number;
+  washerXlCycleMinutes: number;
+  dryerNormalCycleMinutes: number;
+  dryerXlCycleMinutes: number;
   selfServiceWashPriceCents: number;
   selfServiceDryPriceCents: number;
   selfServiceCycleMinutes: number;

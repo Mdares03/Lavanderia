@@ -481,7 +481,7 @@ export function POSDashboard() {
         <section
           className={`mb-4 rounded-xl px-4 py-3 text-sm font-semibold ${relayHealth.connected ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}
         >
-          Relay {relayHealth.mode === "mock" ? "SIMULADOR" : "SERIAL"}: {relayHealth.connected ? "Conectado" : "Desconectado"}
+          Hardware NODE-RED: {relayHealth.connected ? "Conectado" : "Desconectado"}
           {relayHealth.error ? ` (${relayHealth.error})` : ""}
         </section>
       )}
@@ -532,7 +532,6 @@ export function POSDashboard() {
         <SettingsTab
           employee={employee}
           adminPin={sessionPin}
-          machines={machines}
           employees={employees}
           onRefresh={async () => {
             await Promise.all([loadDashboard(), loadEmployees()]);

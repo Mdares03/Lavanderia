@@ -1,17 +1,19 @@
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/http";
-import { prisma } from "@/lib/db";
 import { requireAdminFromRequest } from "@/server/services/authService";
-import { getDashboardMachines } from "@/server/services/machineService";
+import { createMachineAdmin, getDashboardMachines } from "@/server/services/machineService";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const createSchema = z.object({
   name: z.string().min(2),
   type: z.enum(["washer", "dryer"]),
-  relayChannel: z.number().int().min(0).max(63),
+  size: z.enum(["normal", "xl"]).optional(),
+  relayChannel: z.union([z.number().int().min(1).max(63), z.null()]).optional(),
   defaultPriceCents: z.number().int().positive(),
-  defaultDurationMinutes: z.number().int().positive()
+  defaultDurationMinutes: z.number().int().positive().optional(),
+  outOfService: z.boolean().optional(),
+  isActive: z.boolean().optional()
 });
 
 export async function GET() {
@@ -25,9 +27,7 @@ export async function POST(request: Request) {
   try {
     await requireAdminFromRequest(request);
     const payload = createSchema.parse(await request.json());
-    const machine = await prisma.machine.create({
-      data: payload
-    });
+    const machine = await createMachineAdmin(payload);
     return ok({ machine }, 201);
   } catch (error) {
     return fail("No fue posible crear maquina", 403, String(error));

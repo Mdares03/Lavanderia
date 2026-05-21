@@ -12,12 +12,17 @@ model Machine {
   id                     String        @id @default(cuid())
   name                   String        @unique
   type                   String
-  relayChannel           Int           @unique
+  size                   String        @default("normal")
+  relayChannel           Int?          @unique
   defaultPriceCents      Int
   defaultDurationMinutes Int
   outOfService           Boolean       @default(false)
   awaitingRelease        Boolean       @default(false)
   isActive               Boolean       @default(true)
+  lastRelayTestOk        Boolean?
+  lastRelayTestAt        DateTime?
+  lastRelayTestError     String?
+  hardwareValidatedAt    DateTime?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   transactions           Transaction[]
@@ -154,8 +159,12 @@ model AppConfig {
   currency                    String   @default("MXN")
   serialPortPath              String   @default("COM3")
   serialBaudRate              Int      @default(9600)
-  relayMockMode               Boolean  @default(true)
+  relayMockMode               Boolean  @default(false)
   relayConnected              Boolean  @default(false)
+  washerNormalCycleMinutes    Int      @default(35)
+  washerXlCycleMinutes        Int      @default(45)
+  dryerNormalCycleMinutes     Int      @default(45)
+  dryerXlCycleMinutes         Int      @default(55)
   selfServiceWashPriceCents   Int      @default(4500)
   selfServiceDryPriceCents    Int      @default(4500)
   selfServiceCycleMinutes     Int      @default(50)

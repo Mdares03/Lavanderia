@@ -23,6 +23,12 @@ cd /home/mdares/system
 cp -n .env.example .env
 ```
 
+Configura token compartido para gestion de mapeo Node-RED:
+- En `/home/mdares/Laundry/.env` define `RELAY_ADMIN_TOKEN=<token-fuerte>`.
+- En `/home/mdares/.node-red/environment` define el mismo valor:
+  `RELAY_ADMIN_TOKEN=<token-fuerte>`.
+- Reinicia `nodered.service` y `lavanderia.service` despues del cambio.
+
 ## 3. Instalar dependencias y base de datos
 ```bash
 npm ci

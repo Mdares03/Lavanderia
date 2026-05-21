@@ -109,6 +109,9 @@ class TimerService {
         }
       });
 
+      if (tx.machine.relayChannel === null) {
+        throw new Error("Maquina sin canal de relay asignado");
+      }
       await relayManager.turnOff(tx.machine.relayChannel);
 
       await prisma.transaction.update({

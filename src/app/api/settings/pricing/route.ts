@@ -6,6 +6,10 @@ import { requireAdminFromRequest } from "@/server/services/authService";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const pricingSchema = z.object({
+  washerNormalCycleMinutes: z.number().int().positive(),
+  washerXlCycleMinutes: z.number().int().positive(),
+  dryerNormalCycleMinutes: z.number().int().positive(),
+  dryerXlCycleMinutes: z.number().int().positive(),
   selfServiceWashPriceCents: z.number().int().positive(),
   selfServiceDryPriceCents: z.number().int().positive(),
   selfServiceCycleMinutes: z.number().int().positive(),
@@ -35,6 +39,10 @@ export async function GET() {
 
     return ok({
       pricing: {
+        washerNormalCycleMinutes: config.washerNormalCycleMinutes,
+        washerXlCycleMinutes: config.washerXlCycleMinutes,
+        dryerNormalCycleMinutes: config.dryerNormalCycleMinutes,
+        dryerXlCycleMinutes: config.dryerXlCycleMinutes,
         selfServiceWashPriceCents: config.selfServiceWashPriceCents,
         selfServiceDryPriceCents: config.selfServiceDryPriceCents,
         selfServiceCycleMinutes: config.selfServiceCycleMinutes,

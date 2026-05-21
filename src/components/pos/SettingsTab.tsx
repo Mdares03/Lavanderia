@@ -1,30 +1,56 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch } from "@/components/pos/api";
-import type { CustomerRecord, Employee, Machine, PricingVariables } from "@/components/pos/types";
+import type {
+  AdminMachine,
+  CustomerRecord,
+  Employee,
+  PricingVariables,
+  RelayChannelConfig,
+  RelayChannelConfigUpdate
+} from "@/components/pos/types";
 import { formatCurrency } from "@/lib/format";
 
 type SettingsTabProps = {
   employee: Employee;
   adminPin: string;
-  machines: Machine[];
   employees: Employee[];
   onRefresh: () => Promise<void>;
   onError: (value: string) => void;
 };
 
-export function SettingsTab({ employee, adminPin, machines, employees, onRefresh, onError }: SettingsTabProps) {
+export function SettingsTab({ employee, adminPin, employees, onRefresh, onError }: SettingsTabProps) {
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeePin, setNewEmployeePin] = useState("");
   const [newEmployeeIsAdmin, setNewEmployeeIsAdmin] = useState(false);
-  const [serialPath, setSerialPath] = useState("COM3");
-  const [serialBaudRate, setSerialBaudRate] = useState(9600);
-  const [mockMode, setMockMode] = useState(true);
+  const [newMachineName, setNewMachineName] = useState("");
+  const [newMachineType, setNewMachineType] = useState<"washer" | "dryer">("washer");
+  const [newMachineSize, setNewMachineSize] = useState<"normal" | "xl">("normal");
+  const [newMachineRelayChannel, setNewMachineRelayChannel] = useState("");
+  const [newMachinePrice, setNewMachinePrice] = useState("");
+  const [newMachineDuration, setNewMachineDuration] = useState("");
+  const [newMachineActive, setNewMachineActive] = useState(false);
+  const [adminMachines, setAdminMachines] = useState<AdminMachine[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkDuration, setBulkDuration] = useState("");
-  const [machineDrafts, setMachineDrafts] = useState<Record<string, { price: number; duration: number }>>({});
+  const [machineDrafts, setMachineDrafts] = useState<
+    Record<
+      string,
+      {
+        name: string;
+        type: "washer" | "dryer";
+        size: "normal" | "xl";
+        relayChannel: string;
+        price: number;
+        duration: number;
+        outOfService: boolean;
+        isActive: boolean;
+      }
+    >
+  >({});
   const [pricing, setPricing] = useState<PricingVariables | null>(null);
   const [customerQuery, setCustomerQuery] = useState("");
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
@@ -33,18 +59,59 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
   const [testingMachineId, setTestingMachineId] = useState<string | null>(null);
   const [testingAllRelays, setTestingAllRelays] = useState(false);
   const [relayTestFeedback, setRelayTestFeedback] = useState<string | null>(null);
+  const [relayConfigLoading, setRelayConfigLoading] = useState(false);
+  const [relayConfigSaving, setRelayConfigSaving] = useState(false);
+  const [relayConfigRows, setRelayConfigRows] = useState<RelayChannelConfig[]>([]);
+  const [relayConfigDrafts, setRelayConfigDrafts] = useState<Record<number, { label: string; enabled: boolean }>>({});
+
+  const loadAdminMachines = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      const payload = await apiFetch<{ machines: AdminMachine[] }>("/api/machines/catalog", {
+        headers: {
+          "x-admin-pin": adminPin
+        }
+      });
+      setAdminMachines(payload.machines);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [adminPin]);
+
+  const loadRelayConfig = useCallback(async () => {
+    setRelayConfigLoading(true);
+    try {
+      const payload = await apiFetch<{ channels: RelayChannelConfig[] }>("/api/system/relay/config/channels", {
+        headers: {
+          "x-admin-pin": adminPin
+        }
+      });
+      setRelayConfigRows(payload.channels);
+      setRelayConfigDrafts(
+        payload.channels.reduce<Record<number, { label: string; enabled: boolean }>>((acc, row) => {
+          acc[row.channel] = { label: row.label, enabled: row.enabled };
+          return acc;
+        }, {})
+      );
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No fue posible cargar mapeo Node-RED");
+    } finally {
+      setRelayConfigLoading(false);
+    }
+  }, [adminPin, onError]);
 
   useEffect(() => {
-    if (machines.length === 0) {
+    if (adminMachines.length === 0) {
       return;
     }
+    const firstActive = adminMachines.find((machine) => machine.isActive) ?? adminMachines[0];
     if (!bulkPrice) {
-      setBulkPrice((machines[0].defaultPriceCents / 100).toString());
+      setBulkPrice((firstActive.defaultPriceCents / 100).toString());
     }
     if (!bulkDuration) {
-      setBulkDuration(machines[0].defaultDurationMinutes.toString());
+      setBulkDuration(firstActive.defaultDurationMinutes.toString());
     }
-  }, [bulkDuration, bulkPrice, machines]);
+  }, [adminMachines, bulkDuration, bulkPrice]);
 
   useEffect(() => {
     apiFetch<{ pricing: PricingVariables }>("/api/settings/pricing", {
@@ -68,135 +135,301 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
     return () => window.clearTimeout(id);
   }, [customerQuery]);
 
-  const getMachineDraft = (machine: Machine) =>
+  useEffect(() => {
+    loadAdminMachines().catch(() => undefined);
+  }, [loadAdminMachines]);
+
+  useEffect(() => {
+    loadRelayConfig().catch(() => undefined);
+  }, [loadRelayConfig]);
+
+  const getMachineDraft = (machine: AdminMachine) =>
     machineDrafts[machine.id] ?? {
+      name: machine.name,
+      type: machine.type,
+      size: machine.size,
+      relayChannel: machine.relayChannel?.toString() ?? "",
       price: machine.defaultPriceCents / 100,
-      duration: machine.defaultDurationMinutes
+      duration: machine.defaultDurationMinutes,
+      outOfService: machine.outOfService,
+      isActive: machine.isActive
     };
 
-  const washers = machines.filter((machine) => machine.type === "washer");
-  const dryers = machines.filter((machine) => machine.type === "dryer");
+  const activeMachines = adminMachines.filter((machine) => machine.isActive);
+  const inactiveMachines = adminMachines.filter((machine) => !machine.isActive);
+  const activeWashers = activeMachines.filter((machine) => machine.type === "washer");
+  const activeDryers = activeMachines.filter((machine) => machine.type === "dryer");
+  const hardwareReadyCount = adminMachines.filter((machine) => machine.hardware.ready).length;
+  const pendingHardwareCount = adminMachines.filter(
+    (machine) => !machine.hardware.ready && (machine.hardware.backend === "pending" || machine.hardware.error === "channel_not_wired")
+  ).length;
 
-  const renderMachineItem = (machine: Machine) => (
-    <li key={machine.id} className="rounded-lg bg-slate-100 px-3 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-semibold">{machine.name}</span>
-        <button
-          onClick={async () => {
-            try {
-              await apiFetch(`/api/machines/${machine.id}`, {
-                method: "PATCH",
-                headers: {
-                  "x-admin-pin": adminPin
-                },
-                body: JSON.stringify({ outOfService: machine.status !== "out_of_service" })
-              });
-              await onRefresh();
-            } catch (error) {
-              onError(error instanceof Error ? error.message : "No fue posible actualizar maquina");
+  const machineHardwareLabel = (machine: AdminMachine) => {
+    if (machine.hardware.ready) return "Lista";
+    if (machine.hardware.error === "channel_unassigned") return "Sin canal";
+    if (machine.hardware.backend === "pending" || machine.hardware.error === "channel_not_wired") return "Pendiente de relay";
+    return "No disponible";
+  };
+
+  const machineHardwareBadgeClass = (machine: AdminMachine) => {
+    if (machine.hardware.ready) return "bg-emerald-100 text-emerald-700";
+    if (machine.hardware.error === "channel_unassigned") return "bg-slate-200 text-slate-700";
+    if (machine.hardware.backend === "pending" || machine.hardware.error === "channel_not_wired") return "bg-violet-100 text-violet-700";
+    return "bg-rose-100 text-rose-700";
+  };
+
+  const relayTestText = (machine: AdminMachine) => {
+    if (!machine.relayTest.lastRelayTestAt) return "Sin prueba";
+    if (machine.relayTest.lastRelayTestOk) return "OK";
+    return `Fallo: ${machine.relayTest.lastRelayTestError ?? "sin detalle"}`;
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([onRefresh(), loadAdminMachines(), loadRelayConfig()]);
+  };
+
+  const relayConfigDirty = relayConfigRows.some((row) => {
+    const draft = relayConfigDrafts[row.channel];
+    return !!draft && (draft.label !== row.label || draft.enabled !== row.enabled);
+  });
+
+  const backendLabel = (row: RelayChannelConfig) => {
+    if (row.backend === "i2c") return "i2c";
+    if (row.backend === "modbus") return "modbus";
+    return "pending";
+  };
+
+  const locationLabel = (row: RelayChannelConfig) => {
+    if (row.backend === "i2c") {
+      return `board ${row.board ?? 0} / relay ${row.relay ?? "-"}`;
+    }
+    if (row.backend === "modbus") {
+      return `addr ${row.addr ?? "-"} / relay ${row.relay ?? "-"}`;
+    }
+    return "-";
+  };
+
+  const renderMachineItem = (machine: AdminMachine) => {
+    const draft = getMachineDraft(machine);
+    return (
+      <li key={machine.id} className="rounded-lg bg-slate-100 px-3 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-semibold">{machine.name}</p>
+            <p className="text-xs text-slate-600">
+              {machine.type === "washer" ? "Lavadora" : "Secadora"} · {machine.size === "xl" ? "XL" : "Normal"} · Canal{" "}
+              {machine.relayChannel ?? "-"}
+            </p>
+          </div>
+          <span className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${machineHardwareBadgeClass(machine)}`}>{machineHardwareLabel(machine)}</span>
+        </div>
+        <p className="mt-2 text-xs text-slate-600">Ultima prueba: {relayTestText(machine)}</p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <input
+            value={draft.name}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, name: event.target.value }
+              }))
             }
-          }}
-          className={`rounded-lg px-3 py-1 text-xs font-semibold ${machine.status === "out_of_service" ? "bg-red-700 text-white" : "bg-emerald-700 text-white"}`}
-        >
-          {machine.status === "out_of_service" ? "Fuera de servicio" : "Activa"}
-        </button>
-      </div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-        <input
-          type="number"
-          min={1}
-          value={getMachineDraft(machine).price}
-          onChange={(event) =>
-            setMachineDrafts((current) => ({
-              ...current,
-              [machine.id]: {
-                ...(current[machine.id] ?? {
-                  price: machine.defaultPriceCents / 100,
-                  duration: machine.defaultDurationMinutes
-                }),
-                price: Number(event.target.value || 0)
+            className="rounded-lg border border-slate-300 px-3 py-2"
+            placeholder="Nombre"
+          />
+          <input
+            value={draft.relayChannel}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, relayChannel: event.target.value }
+              }))
+            }
+            className="rounded-lg border border-slate-300 px-3 py-2"
+            placeholder="Canal relay (vacío=sin canal)"
+          />
+          <select
+            value={draft.type}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, type: event.target.value as "washer" | "dryer" }
+              }))
+            }
+            className="rounded-lg border border-slate-300 px-3 py-2"
+          >
+            <option value="washer">Lavadora</option>
+            <option value="dryer">Secadora</option>
+          </select>
+          <select
+            value={draft.size}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, size: event.target.value as "normal" | "xl" }
+              }))
+            }
+            className="rounded-lg border border-slate-300 px-3 py-2"
+          >
+            <option value="normal">Normal</option>
+            <option value="xl">XL</option>
+          </select>
+          <input
+            type="number"
+            min={1}
+            value={draft.price}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, price: Number(event.target.value || 0) }
+              }))
+            }
+            className="rounded-lg border border-slate-300 px-3 py-2"
+            placeholder="Precio"
+          />
+          <input
+            type="number"
+            min={1}
+            value={draft.duration}
+            onChange={(event) =>
+              setMachineDrafts((current) => ({
+                ...current,
+                [machine.id]: { ...draft, duration: Number(event.target.value || 0) }
+              }))
+            }
+            className="rounded-lg border border-slate-300 px-3 py-2"
+            placeholder="Minutos"
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={draft.isActive}
+              onChange={(event) =>
+                setMachineDrafts((current) => ({
+                  ...current,
+                  [machine.id]: { ...draft, isActive: event.target.checked }
+                }))
               }
-            }))
-          }
-          className="rounded-lg border border-slate-300 px-3 py-2"
-          placeholder="Precio"
-        />
-        <input
-          type="number"
-          min={1}
-          value={getMachineDraft(machine).duration}
-          onChange={(event) =>
-            setMachineDrafts((current) => ({
-              ...current,
-              [machine.id]: {
-                ...(current[machine.id] ?? {
-                  price: machine.defaultPriceCents / 100,
-                  duration: machine.defaultDurationMinutes
-                }),
-                duration: Number(event.target.value || 0)
+            />
+            Activa
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={draft.outOfService}
+              onChange={(event) =>
+                setMachineDrafts((current) => ({
+                  ...current,
+                  [machine.id]: { ...draft, outOfService: event.target.checked }
+                }))
               }
-            }))
-          }
-          className="rounded-lg border border-slate-300 px-3 py-2"
-          placeholder="Minutos"
-        />
-        <button
-          onClick={async () => {
-            const draft = getMachineDraft(machine);
-            try {
-              await apiFetch(`/api/machines/${machine.id}`, {
-                method: "PATCH",
-                headers: {
-                  "x-admin-pin": adminPin
-                },
-                body: JSON.stringify({
-                  defaultPriceCents: Math.round(draft.price * 100),
-                  defaultDurationMinutes: Math.round(draft.duration)
-                })
-              });
-              await onRefresh();
-            } catch (error) {
-              onError(error instanceof Error ? error.message : "No fue posible guardar configuracion");
-            }
-          }}
-          className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white"
-        >
-          Guardar
-        </button>
-      </div>
-      <div className="mt-2">
-        <button
-          onClick={async () => {
-            setTestingMachineId(machine.id);
-            try {
-              await apiFetch(`/api/machines/${machine.id}/test-relay`, {
-                method: "POST",
-                headers: {
-                  "x-admin-pin": adminPin
-                }
-              });
-              setRelayTestFeedback(`Relay OK en ${machine.name}`);
-            } catch (error) {
-              onError(error instanceof Error ? error.message : "No fue posible probar relay");
-            } finally {
-              setTestingMachineId(null);
-            }
-          }}
-          className="rounded-lg bg-indigo-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-          disabled={testingMachineId === machine.id || testingAllRelays}
-        >
-          {testingMachineId === machine.id ? "Probando relay..." : "Probar relay"}
-        </button>
-      </div>
-    </li>
-  );
+            />
+            Fuera de servicio
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            onClick={async () => {
+              const relayValue = draft.relayChannel.trim();
+              const relayChannel = relayValue.length === 0 ? null : Number(relayValue);
+              if (relayChannel !== null && (!Number.isInteger(relayChannel) || relayChannel < 1 || relayChannel > 63)) {
+                onError("Canal de relay invalido. Usa 1..63.");
+                return;
+              }
+
+              try {
+                await apiFetch(`/api/machines/${machine.id}`, {
+                  method: "PATCH",
+                  headers: {
+                    "x-admin-pin": adminPin
+                  },
+                  body: JSON.stringify({
+                    name: draft.name.trim(),
+                    type: draft.type,
+                    size: draft.size,
+                    relayChannel,
+                    defaultPriceCents: Math.round(draft.price * 100),
+                    defaultDurationMinutes: Math.round(draft.duration),
+                    outOfService: draft.outOfService,
+                    isActive: draft.isActive
+                  })
+                });
+                await refreshAll();
+              } catch (error) {
+                onError(error instanceof Error ? error.message : "No fue posible actualizar maquina");
+              }
+            }}
+            className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white"
+          >
+            Guardar
+          </button>
+          <button
+            onClick={async () => {
+              setTestingMachineId(machine.id);
+              try {
+                const payload = await apiFetch<{ activated: boolean }>(`/api/machines/${machine.id}/test-relay`, {
+                  method: "POST",
+                  headers: {
+                    "x-admin-pin": adminPin
+                  }
+                });
+                setRelayTestFeedback(payload.activated ? `Relay OK y maquina activada: ${machine.name}` : `Relay OK: ${machine.name}`);
+                await refreshAll();
+              } catch (error) {
+                onError(error instanceof Error ? error.message : "No fue posible probar relay");
+              } finally {
+                setTestingMachineId(null);
+              }
+            }}
+            className="rounded-lg bg-indigo-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            disabled={testingMachineId === machine.id || testingAllRelays}
+          >
+            {testingMachineId === machine.id ? "Probando..." : "Probar relay"}
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                await apiFetch(`/api/machines/${machine.id}/remove`, {
+                  method: "POST",
+                  headers: {
+                    "x-admin-pin": adminPin
+                  }
+                });
+                await refreshAll();
+              } catch (error) {
+                onError(error instanceof Error ? error.message : "No fue posible remover maquina");
+              }
+            }}
+            className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-semibold text-white"
+          >
+            Quitar (inactiva)
+          </button>
+        </div>
+      </li>
+    );
+  };
 
   return (
     <section className="grid gap-4 lg:grid-cols-2">
       <article className="rounded-2xl bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900">Maquinas</h2>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Total catalogo</p>
+            <p className="font-semibold text-slate-900">{adminMachines.length}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+            <p className="text-xs uppercase tracking-wide text-emerald-700">Hardware listo</p>
+            <p className="font-semibold text-emerald-900">{hardwareReadyCount}</p>
+          </div>
+          <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm">
+            <p className="text-xs uppercase tracking-wide text-violet-700">Pendiente de relay</p>
+            <p className="font-semibold text-violet-900">{pendingHardwareCount}</p>
+          </div>
+        </div>
         <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-sm font-semibold text-slate-800">Aplicar valor global a todas</p>
+          <p className="text-sm font-semibold text-slate-800">Aplicar valor global a activas</p>
           <p className="mt-1 text-xs text-slate-600">Despues puedes sobrescribir una maquina individualmente.</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
             <input
@@ -249,7 +482,7 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
                     body: JSON.stringify(payload)
                   });
                   setMachineDrafts({});
-                  await onRefresh();
+                  await refreshAll();
                 } catch (error) {
                   onError(error instanceof Error ? error.message : "No fue posible aplicar configuracion global");
                 }
@@ -298,20 +531,119 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
               onClick={() => setShowMachineList((current) => !current)}
               className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white"
             >
-              {showMachineList ? "Ocultar lista" : `Mostrar lista (${machines.length})`}
+              {showMachineList ? "Ocultar lista" : `Mostrar lista (${adminMachines.length})`}
             </button>
           </div>
         </div>
         {relayTestFeedback && <p className="mt-2 text-xs font-semibold text-emerald-700">{relayTestFeedback}</p>}
+        {catalogLoading && <p className="mt-2 text-xs text-slate-500">Cargando catalogo...</p>}
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-sm font-semibold text-slate-800">Agregar maquina</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <input
+              value={newMachineName}
+              onChange={(event) => setNewMachineName(event.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Nombre"
+            />
+            <input
+              value={newMachineRelayChannel}
+              onChange={(event) => setNewMachineRelayChannel(event.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Canal relay (vacío permitido)"
+            />
+            <select value={newMachineType} onChange={(event) => setNewMachineType(event.target.value as "washer" | "dryer")} className="rounded-lg border border-slate-300 px-3 py-2">
+              <option value="washer">Lavadora</option>
+              <option value="dryer">Secadora</option>
+            </select>
+            <select value={newMachineSize} onChange={(event) => setNewMachineSize(event.target.value as "normal" | "xl")} className="rounded-lg border border-slate-300 px-3 py-2">
+              <option value="normal">Normal</option>
+              <option value="xl">XL</option>
+            </select>
+            <input
+              type="number"
+              min={1}
+              value={newMachinePrice}
+              onChange={(event) => setNewMachinePrice(event.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Precio MXN"
+            />
+            <input
+              type="number"
+              min={1}
+              value={newMachineDuration}
+              onChange={(event) => setNewMachineDuration(event.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Duracion minutos"
+            />
+          </div>
+          <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={newMachineActive} onChange={(event) => setNewMachineActive(event.target.checked)} />
+            Crear activa
+          </label>
+          <button
+            onClick={async () => {
+              const relayValue = newMachineRelayChannel.trim();
+              const relayChannel = relayValue.length === 0 ? null : Number(relayValue);
+              if (!newMachineName.trim()) {
+                onError("Nombre de maquina requerido");
+                return;
+              }
+              if (!newMachinePrice.trim() || Number(newMachinePrice) <= 0) {
+                onError("Precio invalido");
+                return;
+              }
+              if (relayChannel !== null && (!Number.isInteger(relayChannel) || relayChannel < 1 || relayChannel > 63)) {
+                onError("Canal de relay invalido. Usa 1..63.");
+                return;
+              }
+
+              try {
+                await apiFetch("/api/machines", {
+                  method: "POST",
+                  headers: {
+                    "x-admin-pin": adminPin
+                  },
+                  body: JSON.stringify({
+                    name: newMachineName.trim(),
+                    type: newMachineType,
+                    size: newMachineSize,
+                    relayChannel,
+                    defaultPriceCents: Math.round(Number(newMachinePrice) * 100),
+                    defaultDurationMinutes: newMachineDuration.trim().length > 0 ? Math.round(Number(newMachineDuration)) : undefined,
+                    isActive: newMachineActive
+                  })
+                });
+                setNewMachineName("");
+                setNewMachineRelayChannel("");
+                setNewMachinePrice("");
+                setNewMachineDuration("");
+                setNewMachineType("washer");
+                setNewMachineSize("normal");
+                setNewMachineActive(false);
+                await refreshAll();
+              } catch (error) {
+                onError(error instanceof Error ? error.message : "No fue posible crear maquina");
+              }
+            }}
+            className="mt-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white"
+          >
+            Agregar maquina
+          </button>
+        </div>
         {showMachineList && (
           <div className="mt-3 grid gap-3 text-sm">
             <details className="rounded-xl border border-slate-200 bg-white p-3" open>
-              <summary className="cursor-pointer font-semibold text-slate-800">Lavadoras ({washers.length})</summary>
-              <ul className="mt-3 grid gap-2">{washers.map(renderMachineItem)}</ul>
+              <summary className="cursor-pointer font-semibold text-slate-800">Lavadoras activas ({activeWashers.length})</summary>
+              <ul className="mt-3 grid gap-2">{activeWashers.map(renderMachineItem)}</ul>
             </details>
             <details className="rounded-xl border border-slate-200 bg-white p-3">
-              <summary className="cursor-pointer font-semibold text-slate-800">Secadoras ({dryers.length})</summary>
-              <ul className="mt-3 grid gap-2">{dryers.map(renderMachineItem)}</ul>
+              <summary className="cursor-pointer font-semibold text-slate-800">Secadoras activas ({activeDryers.length})</summary>
+              <ul className="mt-3 grid gap-2">{activeDryers.map(renderMachineItem)}</ul>
+            </details>
+            <details className="rounded-xl border border-slate-200 bg-white p-3">
+              <summary className="cursor-pointer font-semibold text-slate-800">Inactivas ({inactiveMachines.length})</summary>
+              <ul className="mt-3 grid gap-2">{inactiveMachines.map(renderMachineItem)}</ul>
             </details>
           </div>
         )}
@@ -440,49 +772,136 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
       </article>
 
       <article className="rounded-2xl bg-white p-5 shadow-sm lg:col-span-2">
-        <h2 className="text-xl font-bold text-slate-900">Serial / Relay</h2>
-        <div className="mt-3 grid gap-2 sm:grid-cols-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={mockMode} onChange={(event) => setMockMode(event.target.checked)} />
-            Modo simulador
-          </label>
-          <input
-            value={serialPath}
-            onChange={(event) => setSerialPath(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-            placeholder="Puerto"
-          />
-          <input
-            type="number"
-            value={serialBaudRate}
-            onChange={(event) => setSerialBaudRate(Number(event.target.value || 9600))}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-            placeholder="BaudRate"
-          />
-          <button
-            onClick={async () => {
-              try {
-                await apiFetch("/api/settings/serial", {
-                  method: "PATCH",
-                  headers: {
-                    "x-admin-pin": adminPin
-                  },
-                  body: JSON.stringify({
-                    relayMockMode: mockMode,
-                    serialPortPath: serialPath,
-                    serialBaudRate
-                  })
-                });
-                await onRefresh();
-              } catch (error) {
-                onError(error instanceof Error ? error.message : "No fue posible actualizar serial");
-              }
-            }}
-            className="rounded-xl bg-slate-800 px-4 py-2 font-semibold text-white"
-          >
-            Reconectar relay
-          </button>
+        <h2 className="text-xl font-bold text-slate-900">Estado de hardware</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Los canales marcados como <strong>Pendiente de relay</strong> existen en catalogo pero aun no tienen hardware instalado.
+        </p>
+        <p className="mt-2 text-xs text-slate-500">Cuando lleguen nuevos relays, actualiza el mapeo en Node-RED para habilitar esos canales.</p>
+      </article>
+
+      <article className="rounded-2xl bg-white p-5 shadow-sm lg:col-span-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Mapeo Node-RED</h2>
+            <p className="mt-1 text-xs text-slate-600">Edita solo etiqueta y habilitacion. Backend/direccion/relay se gestionan automaticamente.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadRelayConfig().catch(() => undefined)}
+              className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              Recargar
+            </button>
+            <button
+              onClick={async () => {
+                const updates: RelayChannelConfigUpdate[] = [];
+                for (const row of relayConfigRows) {
+                  const draft = relayConfigDrafts[row.channel];
+                  if (!draft) continue;
+                  if (draft.label !== row.label || draft.enabled !== row.enabled) {
+                    updates.push({
+                      channel: row.channel,
+                      label: draft.label.trim(),
+                      enabled: draft.enabled
+                    });
+                  }
+                }
+                if (updates.length === 0) {
+                  setRelayTestFeedback("Sin cambios en mapeo Node-RED");
+                  return;
+                }
+
+                if (updates.some((row) => !row.label || row.label.length === 0)) {
+                  onError("Cada canal debe tener etiqueta");
+                  return;
+                }
+
+                setRelayConfigSaving(true);
+                try {
+                  await apiFetch<{ channels: RelayChannelConfig[] }>("/api/system/relay/config/channels", {
+                    method: "PUT",
+                    headers: {
+                      "x-admin-pin": adminPin
+                    },
+                    body: JSON.stringify({ channels: updates })
+                  });
+                  setRelayTestFeedback(`Mapeo actualizado: ${updates.length} canal(es)`);
+                  await refreshAll();
+                } catch (error) {
+                  onError(error instanceof Error ? error.message : "No fue posible guardar mapeo Node-RED");
+                } finally {
+                  setRelayConfigSaving(false);
+                }
+              }}
+              disabled={relayConfigSaving || !relayConfigDirty}
+              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+            >
+              {relayConfigSaving ? "Guardando..." : "Guardar mapeo"}
+            </button>
+          </div>
         </div>
+        {relayConfigLoading ? (
+          <p className="mt-3 text-xs text-slate-500">Cargando mapeo...</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-full text-xs">
+              <thead className="bg-slate-100 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Canal</th>
+                  <th className="px-3 py-2 text-left">Etiqueta</th>
+                  <th className="px-3 py-2 text-left">Habilitado</th>
+                  <th className="px-3 py-2 text-left">Backend</th>
+                  <th className="px-3 py-2 text-left">Ubicacion</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {relayConfigRows.map((row) => {
+                  const draft = relayConfigDrafts[row.channel] ?? { label: row.label, enabled: row.enabled };
+                  return (
+                    <tr key={row.channel}>
+                      <td className="px-3 py-2 font-semibold text-slate-900">{row.channel}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          value={draft.label}
+                          onChange={(event) =>
+                            setRelayConfigDrafts((current) => ({
+                              ...current,
+                              [row.channel]: {
+                                ...draft,
+                                label: event.target.value
+                              }
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-300 px-2 py-1.5"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <label className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draft.enabled}
+                            onChange={(event) =>
+                              setRelayConfigDrafts((current) => ({
+                                ...current,
+                                [row.channel]: {
+                                  ...draft,
+                                  enabled: event.target.checked
+                                }
+                              }))
+                            }
+                          />
+                          {draft.enabled ? "Si" : "No"}
+                        </label>
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">{backendLabel(row)}</td>
+                      <td className="px-3 py-2 text-slate-700">{locationLabel(row)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </article>
 
       {pricing && (
@@ -490,6 +909,68 @@ export function SettingsTab({ employee, adminPin, machines, employees, onRefresh
           <h2 className="text-xl font-bold text-slate-900">Variables de precio</h2>
           <p className="mt-1 text-xs text-slate-600">Configuracion por categoria de servicio</p>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <h3 className="text-sm font-semibold text-slate-800">Duracion por tipo de maquina</h3>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Lavadora normal (min)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pricing.washerNormalCycleMinutes}
+                    onChange={(event) =>
+                      setPricing((current) =>
+                        current ? { ...current, washerNormalCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
+                      )
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Lavadora XL (min)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pricing.washerXlCycleMinutes}
+                    onChange={(event) =>
+                      setPricing((current) =>
+                        current ? { ...current, washerXlCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
+                      )
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Secadora normal (min)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pricing.dryerNormalCycleMinutes}
+                    onChange={(event) =>
+                      setPricing((current) =>
+                        current ? { ...current, dryerNormalCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
+                      )
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Secadora XL (min)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pricing.dryerXlCycleMinutes}
+                    onChange={(event) =>
+                      setPricing((current) =>
+                        current ? { ...current, dryerXlCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
+                      )
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
+            </article>
+
             <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <h3 className="text-sm font-semibold text-slate-800">Servicio 1: Autoservicio</h3>
               <div className="mt-2 grid gap-2 sm:grid-cols-3">

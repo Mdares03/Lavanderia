@@ -2,6 +2,7 @@ import "server-only";
 
 import { addMinutes } from "@/lib/time";
 import { prisma } from "@/lib/db";
+import { RelayApiError } from "@/lib/relay/types";
 import {
   ENCARGO_ORDER_STATUS,
   TRANSACTION_STATUS,
@@ -64,6 +65,19 @@ export async function activateMachine(input: ActivateMachineInput) {
 
     if (machine.transactions.length > 0) {
       throw new Error("Maquina actualmente en uso");
+    }
+
+    if (machine.relayChannel === null) {
+      throw new Error("Maquina sin canal de relay asignado");
+    }
+
+    try {
+      await relayManager.assertChannelReady(machine.relayChannel);
+    } catch (error) {
+      if (error instanceof RelayApiError && error.code === "channel_not_wired") {
+        throw new Error("Esta maquina todavia no esta conectada al sistema. Usa otra maquina o avisa al encargado.");
+      }
+      throw error;
     }
 
     const customer = await tx.customer.findUnique({
@@ -252,6 +266,10 @@ export async function retryRelayOn(transactionId: string) {
     data: { relayOnAttemptedAt: new Date() }
   });
 
+  if (transaction.machine.relayChannel === null) {
+    throw new Error("Maquina sin canal de relay asignado");
+  }
+  await relayManager.assertChannelReady(transaction.machine.relayChannel);
   await relayManager.turnOn(transaction.machine.relayChannel);
   const updated = await prisma.transaction.update({
     where: { id: transaction.id },
@@ -395,6 +413,9 @@ export async function voidTransaction(input: {
   }
 
   if (transaction.status === TRANSACTION_STATUS.running) {
+    if (transaction.machine.relayChannel === null) {
+      throw new Error("Maquina sin canal de relay asignado");
+    }
     await prisma.transaction.update({
       where: { id: transaction.id },
       data: {

@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-type ComboLabel = "Encargo" | "XL";
+type ComboLabel = "XL";
 
 function buildMachineName(type: "washer" | "dryer", number: number, label?: ComboLabel) {
   const base = type === "washer" ? `Lavadora ${number}` : `Secadora ${number}`;
@@ -20,7 +20,11 @@ async function main() {
       currency: "MXN",
       serialPortPath: "COM3",
       serialBaudRate: 9600,
-      relayMockMode: true
+      relayMockMode: false,
+      washerNormalCycleMinutes: 35,
+      washerXlCycleMinutes: 45,
+      dryerNormalCycleMinutes: 45,
+      dryerXlCycleMinutes: 55
     }
   });
 
@@ -44,25 +48,24 @@ async function main() {
   if (existingMachineCount === 0) {
     const combos = [
       ...Array.from({ length: 12 }, (_, index) => ({ number: index + 1 as number, label: undefined as ComboLabel | undefined })),
-      { number: 13, label: "Encargo" as const },
-      { number: 14, label: "Encargo" as const },
-      { number: 15, label: "Encargo" as const },
-      { number: 16, label: "XL" as const }
+      { number: 13, label: "XL" as const }
     ];
 
     const washers = combos.map((combo, index) => ({
       name: buildMachineName("washer", combo.number, combo.label),
       type: "washer" as const,
-      relayChannel: index,
+      size: combo.label ? ("xl" as const) : ("normal" as const),
+      relayChannel: index + 1,
       defaultPriceCents: 8000,
-      defaultDurationMinutes: 35
+      defaultDurationMinutes: combo.label ? 45 : 35
     }));
     const dryers = combos.map((combo, index) => ({
       name: buildMachineName("dryer", combo.number, combo.label),
       type: "dryer" as const,
-      relayChannel: index + combos.length,
+      size: combo.label ? ("xl" as const) : ("normal" as const),
+      relayChannel: index + combos.length + 1,
       defaultPriceCents: 6000,
-      defaultDurationMinutes: 45
+      defaultDurationMinutes: combo.label ? 55 : 45
     }));
     const machines = [...washers, ...dryers];
     await prisma.machine.createMany({ data: machines });

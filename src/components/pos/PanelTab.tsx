@@ -62,11 +62,7 @@ export function PanelTab({
   const dryers = machines.filter((machine) => machine.type === "dryer");
 
   const getSpecialLabel = (machine: Machine) => {
-    const upper = machine.name.toUpperCase();
-    if (upper.includes("(ENCARGO)")) {
-      return "ENCARGO";
-    }
-    if (upper.includes("(XL)")) {
+    if (machine.size === "xl") {
       return "XL";
     }
     return null;
@@ -87,6 +83,8 @@ export function PanelTab({
             : "border-2 border-rose-300 bg-rose-800 text-white shadow-lg"
           : machine.status === "finished"
             ? "border-2 border-amber-400 bg-amber-300 text-amber-950 shadow-lg animate-finish-pulse"
+            : machine.status === "pending_hardware"
+              ? "border-2 border-violet-300 bg-violet-100 text-violet-950"
             : machine.type === "washer"
               ? "border-2 border-cyan-300 bg-cyan-100 text-cyan-950"
               : "border-2 border-amber-300 bg-amber-100 text-amber-950";
@@ -102,6 +100,7 @@ export function PanelTab({
             onSelectRunning(machine.id);
           }
         }}
+        disabled={machine.status === "pending_hardware"}
         className={`${statusClass} min-h-28 rounded-xl p-3 text-left transition hover:scale-[1.01]`}
       >
         <div className="mb-2 flex items-start justify-between gap-2">
@@ -118,9 +117,11 @@ export function PanelTab({
                 ? "En marcha"
                 : machine.status === "finished"
                   ? "Ciclo terminado"
-                  : machine.status === "available"
-                    ? "Lista"
-                    : "Fuera"}
+                  : machine.status === "pending_hardware"
+                    ? "Pendiente de hardware"
+                    : machine.status === "available"
+                      ? "Lista"
+                      : "Fuera"}
             </span>
           </div>
         </div>
@@ -137,6 +138,12 @@ export function PanelTab({
           <>
             <p className="text-lg font-bold">Disponible</p>
             <p className="text-xs">Tap para activar</p>
+          </>
+        )}
+        {machine.status === "pending_hardware" && (
+          <>
+            <p className="text-lg font-bold">Pendiente de hardware</p>
+            <p className="text-xs">Canal {machine.relayChannel} no cableado</p>
           </>
         )}
         {machine.status === "out_of_service" && <p className="text-lg font-bold">Fuera de servicio</p>}

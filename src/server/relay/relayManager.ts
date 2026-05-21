@@ -3,15 +3,22 @@ import "server-only";
 import { APP_DEFAULTS } from "@/lib/config";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { MockRelayController } from "@/lib/relay/mockRelayController";
-import { SerialRelayController } from "@/lib/relay/serialRelayController";
-import type { RelayController, RelayHealth } from "@/lib/relay/types";
+import { HttpRelayController } from "@/lib/relay/httpRelayController";
+import {
+  RelayApiError,
+  type RelayChannelConfig,
+  type RelayChannelConfigUpdate,
+  type RelayChannelMap,
+  type RelayChannelStatus,
+  type RelayController,
+  type RelayHealth
+} from "@/lib/relay/types";
 
 class RelayManager {
   private controller: RelayController | null = null;
   private health: RelayHealth = {
     connected: false,
-    mode: "mock"
+    mode: "http"
   };
   private initialized = false;
 
@@ -32,10 +39,10 @@ class RelayManager {
         businessName: "La Burbuja"
       }
     });
-    await this.connectWithSettings(config.relayMockMode, config.serialPortPath, config.serialBaudRate);
+    await this.connectWithSettings(false, config.serialPortPath, config.serialBaudRate);
   }
 
-  async connectWithSettings(mockMode: boolean, port: string, baudRate: number) {
+  async connectWithSettings(_mockMode: boolean, port: string, baudRate: number) {
     if (this.controller) {
       try {
         await this.controller.disconnect();
@@ -44,10 +51,10 @@ class RelayManager {
       }
     }
 
-    this.controller = mockMode ? new MockRelayController() : new SerialRelayController();
+    this.controller = new HttpRelayController();
     this.health = {
       connected: false,
-      mode: mockMode ? "mock" : "serial",
+      mode: "http",
       port
     };
 
@@ -59,7 +66,7 @@ class RelayManager {
         where: { id: 1 },
         data: {
           relayConnected: true,
-          relayMockMode: mockMode,
+          relayMockMode: false,
           serialPortPath: port,
           serialBaudRate: baudRate || APP_DEFAULTS.serialBaudRate
         }
@@ -73,7 +80,7 @@ class RelayManager {
         where: { id: 1 },
         data: {
           relayConnected: false,
-          relayMockMode: mockMode,
+          relayMockMode: false,
           serialPortPath: port,
           serialBaudRate: baudRate || APP_DEFAULTS.serialBaudRate
         }
@@ -118,6 +125,74 @@ class RelayManager {
     return this.controller.getStatus(channel);
   }
 
+  async getRelayMap() {
+    await this.init();
+    if (!this.controller) {
+      return [] as RelayChannelMap[];
+    }
+    return this.controller.getMap();
+  }
+
+  async getAllRelayStatuses() {
+    await this.init();
+    if (!this.controller) {
+      return [] as RelayChannelStatus[];
+    }
+    return this.controller.getStatusAll();
+  }
+
+  async getRelayConfigChannels(adminToken: string) {
+    await this.init();
+    if (!this.controller) {
+      return [] as RelayChannelConfig[];
+    }
+    return this.controller.getConfigChannels(adminToken);
+  }
+
+  async updateRelayConfigChannels(adminToken: string, updates: RelayChannelConfigUpdate[]) {
+    await this.init();
+    if (!this.controller) {
+      return [] as RelayChannelConfig[];
+    }
+    return this.controller.updateConfigChannels(adminToken, updates);
+  }
+
+  async assertChannelReady(channel: number) {
+    await this.init();
+    const statuses = await this.getAllRelayStatuses();
+    const found = statuses.find((item) => item.channel === channel);
+
+    if (!found) {
+      throw new RelayApiError(`Canal ${channel} no existe`, 400, "invalid_channel");
+    }
+    if (!found.enabled || found.backend === "pending") {
+      throw new RelayApiError(`Canal ${channel} pendiente de hardware`, 409, "channel_not_wired");
+    }
+    if (found.error) {
+      throw new RelayApiError(`Canal ${channel} no disponible`, 503, found.error);
+    }
+    return found;
+  }
+
+  async listSerialPorts() {
+    const config = await prisma.appConfig.findUnique({
+      where: { id: 1 },
+      select: { serialPortPath: true }
+    });
+
+    const ports = new Set<string>([
+      "/dev/serial0",
+      "/dev/ttyAMA0",
+      "/dev/ttyAMA10"
+    ]);
+
+    if (config?.serialPortPath) {
+      ports.add(config.serialPortPath);
+    }
+
+    return Array.from(ports);
+  }
+
   async reconnect() {
     this.initialized = false;
     await this.init();
@@ -128,16 +203,7 @@ class RelayManager {
     return this.health;
   }
 
-  async listSerialPorts() {
-    try {
-      return await SerialRelayController.listPorts();
-    } catch (error) {
-      logger.warn("No se pudieron listar puertos seriales", {
-        error: String(error)
-      });
-      return [];
-    }
-  }
+  
 }
 
 declare global {

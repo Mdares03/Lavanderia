@@ -3,7 +3,7 @@ export const APP_DEFAULTS = {
   currency: "MXN",
   locale: "es-MX",
   serialBaudRate: 9600,
-  serialPortPath: "COM3"
+  serialPortPath: "/dev/serial0"
 } as const;
 
 export function getNodeEnv(): "development" | "test" | "production" {
