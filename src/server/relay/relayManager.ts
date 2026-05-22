@@ -36,7 +36,7 @@ class RelayManager {
       update: {},
       create: {
         id: 1,
-        businessName: "La Burbuja"
+        businessName: "Punto Lavado"
       }
     });
     await this.connectWithSettings(false, config.serialPortPath, config.serialBaudRate);

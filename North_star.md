@@ -1,4 +1,4 @@
-# La Burbuja — Laundry POS System Specification
+# Punto Lavado — Laundry POS System Specification
 
 ## Project North Star
 

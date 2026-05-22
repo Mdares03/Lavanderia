@@ -1,5 +1,5 @@
 [Unit]
-Description=La Burbuja POS (Next.js)
+Description=Punto Lavado POS (Next.js)
 After=network-online.target nodered.service
 Wants=network-online.target nodered.service
 

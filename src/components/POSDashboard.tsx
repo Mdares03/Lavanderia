@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/components/pos/api";
 import { LoginScreen } from "@/components/pos/LoginScreen";
 import { PanelTab } from "@/components/pos/PanelTab";
+import { PrintHistoryTab } from "@/components/pos/PrintHistoryTab";
 import { ReportsTab } from "@/components/pos/ReportsTab";
 import { SettingsTab } from "@/components/pos/SettingsTab";
 import { ShiftTab } from "@/components/pos/ShiftTab";
@@ -19,52 +20,34 @@ import type {
   PaymentMethod,
   RelayHealth,
   ReportSummary,
-  TicketPreviewData,
-  UtilizationRow
+  UtilizationRow,
+  WorkOrderProcessResult
 } from "@/components/pos/types";
 import { ActivateModal } from "@/components/pos/modals/ActivateModal";
 import { ChangePinModal } from "@/components/pos/modals/ChangePinModal";
 import { NewEncargoModal } from "@/components/pos/modals/NewEncargoModal";
 import { RunningModal } from "@/components/pos/modals/RunningModal";
-import { TicketPreviewModal } from "@/components/pos/modals/TicketPreviewModal";
 import { TransactionDetailModal } from "@/components/pos/modals/TransactionDetailModal";
 
-type TabId = "panel" | "corte" | "reportes" | "graficas" | "config";
+type TabId = "panel" | "corte" | "impresiones" | "reportes" | "graficas" | "config";
+type ClearSessionOptions = {
+  loginErrorMessage?: string | null;
+};
+
+const INACTIVITY_TIMEOUT_MS = 180_000;
+const INACTIVITY_LOCK_MESSAGE = "Sesion bloqueada por inactividad (3 min).";
+const INACTIVITY_EVENTS = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "scroll"] as const;
 
 const tabLabels: Record<TabId, string> = {
   panel: "Panel",
   corte: "Corte",
+  impresiones: "Impresiones",
   reportes: "Reportes",
   graficas: "Graficas",
   config: "Configuracion"
 };
 
-type ActivationApiResponse = {
-  transaction: {
-    ticketNumber: number;
-    addonDetergentQty: number;
-    addonSoftenerQty: number;
-    addonBleachQty: number;
-    discountCents: number;
-    loyaltyDiscountApplied: boolean;
-    amountCents: number;
-    serviceType: "autoservicio" | "encargo" | "xl";
-    paymentMethod: "cash" | "card" | "transfer";
-    createdAt: string;
-    customer?: {
-      firstName: string;
-      lastName: string;
-    };
-    employee?: {
-      name: string;
-    };
-    machine?: {
-      name: string;
-    };
-  };
-  relayOk: boolean;
-  relayError?: string;
-};
+const CASH_CAP_TOAST_MESSAGE = "Caja al tope: registra cash drop antes de la siguiente venta.";
 
 function buildRange(daysBack = 2) {
   const to = new Date();
@@ -106,7 +89,6 @@ export function POSDashboard() {
   const [kpiReport, setKpiReport] = useState<KpiReport | null>(null);
   const [ownerBrief, setOwnerBrief] = useState<OwnerBrief | null>(null);
   const [showChangePin, setShowChangePin] = useState(false);
-  const [ticketPreview, setTicketPreview] = useState<TicketPreviewData | null>(null);
   const isAdmin = employee?.isAdmin ?? false;
   const finishedTxIdsRef = useRef<Set<string>>(new Set());
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -116,7 +98,10 @@ export function POSDashboard() {
     [sessionPin]
   );
   const availableTabs = useMemo(
-    () => (isAdmin ? (["panel", "corte", "reportes", "graficas", "config"] as TabId[]) : (["panel", "corte"] as TabId[])),
+    () =>
+      isAdmin
+        ? (["panel", "corte", "impresiones", "reportes", "graficas", "config"] as TabId[])
+        : (["panel", "corte", "impresiones"] as TabId[]),
     [isAdmin]
   );
   const pushToast = useCallback((message: string, tone: "success" | "error" | "info" = "success") => {
@@ -263,7 +248,7 @@ export function POSDashboard() {
       throw new Error("Solo administrador puede exportar");
     }
 
-    const query = `from=${encodeURIComponent(new Date(reportFrom).toISOString())}&to=${encodeURIComponent(new Date(reportTo).toISOString())}`;
+    const query = `from=${encodeURIComponent(new Date(reportFrom).toISOString())}&to=${encodeURIComponent(new Date(reportTo).toISOString())}&format=analytics_pack`;
     const response = await fetch(`/api/reports/export?${query}`, {
       headers: {
         "x-admin-pin": sessionPin
@@ -279,7 +264,9 @@ export function POSDashboard() {
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = objectUrl;
-    link.download = "reporte.csv";
+    const fromDate = new Date(reportFrom).toISOString().slice(0, 10);
+    const toDate = new Date(reportTo).toISOString().slice(0, 10);
+    link.download = `analytics_export_${fromDate}_${toDate}.zip`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -324,18 +311,18 @@ export function POSDashboard() {
     }
   };
 
-  const logout = () => {
+  const clearSession = useCallback((options?: ClearSessionOptions) => {
     setEmployee(null);
     setSessionPin(null);
     setPin("");
     setTab("panel");
     setShowChangePin(false);
-    setError(null);
+    setShowNewEncargo(false);
+    setError(options?.loginErrorMessage ?? null);
     setMachines([]);
     setEmployees([]);
     setRelayHealth(null);
     setActiveShift({ shift: null, summary: null });
-    setTicketPreview(null);
     setRecentTransactions([]);
     setReportTransactions([]);
     setEncargoOrders([]);
@@ -344,7 +331,39 @@ export function POSDashboard() {
     setActivateMachineId(null);
     setPreferredEncargoOrderId(null);
     setToasts([]);
-  };
+  }, []);
+
+  const logout = useCallback(() => {
+    clearSession();
+  }, [clearSession]);
+
+  useEffect(() => {
+    if (!employee) {
+      return;
+    }
+
+    let timeoutId = window.setTimeout(() => {
+      clearSession({ loginErrorMessage: INACTIVITY_LOCK_MESSAGE });
+    }, INACTIVITY_TIMEOUT_MS);
+
+    const resetInactivityTimer = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        clearSession({ loginErrorMessage: INACTIVITY_LOCK_MESSAGE });
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    for (const eventName of INACTIVITY_EVENTS) {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    }
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      for (const eventName of INACTIVITY_EVENTS) {
+        window.removeEventListener(eventName, resetInactivityTimer);
+      }
+    };
+  }, [clearSession, employee]);
 
   const activate = async (
     machine: Machine,
@@ -355,6 +374,7 @@ export function POSDashboard() {
       durationMinutes: number;
       serviceType: "autoservicio" | "encargo" | "xl";
       paymentMethod: "cash" | "card" | "transfer";
+      weightKg: number;
       encargoOrderId?: string;
       addons: {
         detergentQty: number;
@@ -366,58 +386,61 @@ export function POSDashboard() {
     if (!employee) {
       return;
     }
-    const result = await apiFetch<ActivationApiResponse>("/api/transactions", {
-      method: "POST",
-      body: JSON.stringify({
-        machineId: machine.id,
-        employeeId: employee.id,
-        customerId: form.customerId,
-        baseAmountCents: form.baseAmountCents,
-        durationMinutes: form.durationMinutes,
-        serviceType: form.serviceType,
-        paymentMethod: form.paymentMethod,
-        encargoOrderId: form.encargoOrderId,
-        addons: form.addons
-      })
-    });
+    try {
+      const result = await apiFetch<WorkOrderProcessResult>("/api/orders/process", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId: employee.id,
+          customerId: form.customerId,
+          baseAmountCents: form.baseAmountCents,
+          serviceType: form.serviceType,
+          paymentMethod: form.paymentMethod,
+          weightKg: form.weightKg,
+          encargoOrderId: form.encargoOrderId,
+          addons: form.addons
+        })
+      });
 
-    const totalCents = result.transaction.amountCents;
-    const subtotalCents = Math.round(totalCents / 1.16);
-    const ivaCents = totalCents - subtotalCents;
-    const resolvedCustomerName = result.transaction.customer
-      ? `${result.transaction.customer.firstName} ${result.transaction.customer.lastName}`.trim()
-      : form.customerName;
+      if (result.workOrder) {
+        pushToast(`Orden #${result.workOrder.orderNumber} creada (${result.workOrder.requiredLoads} cargas).`, "success");
+      }
+      if (result.relayFailures.length > 0) {
+        const relayMessage = `Orden creada, pero ${result.relayFailures.length} carga(s) no encendieron relay.`;
+        setError(relayMessage);
+        pushToast(relayMessage, "error");
+      } else {
+        setError(null);
+      }
+      if (result.printFailures.length > 0) {
+        const retryResults = await Promise.allSettled(
+          result.printFailures.map((row) =>
+            apiFetch<{ job: { id: string } }>(`/api/print-jobs/${row.id}/retry`, {
+              method: "POST",
+              headers: sessionPin ? { "x-session-pin": sessionPin } : undefined
+            })
+          )
+        );
+        const retriedOk = retryResults.filter((item) => item.status === "fulfilled").length;
+        const stillFailed = result.printFailures.length - retriedOk;
+        const printMessage =
+          stillFailed > 0
+            ? `Impresion: ${retriedOk} recuperado(s), ${stillFailed} aun fallan.`
+            : `Impresion recuperada automaticamente (${retriedOk} ticket(s)).`;
+        setError(stillFailed > 0 ? printMessage : null);
+        pushToast(printMessage, stillFailed > 0 ? "error" : "success");
+      }
 
-    setTicketPreview({
-      ticketNumber: result.transaction.ticketNumber,
-      customerName: resolvedCustomerName,
-      serviceType: result.transaction.serviceType ?? form.serviceType,
-      addons: {
-        detergentQty: result.transaction.addonDetergentQty,
-        softenerQty: result.transaction.addonSoftenerQty,
-        bleachQty: result.transaction.addonBleachQty
-      },
-      loyaltyApplied: result.transaction.loyaltyDiscountApplied,
-      discountCents: result.transaction.discountCents,
-      subtotalCents,
-      ivaCents,
-      totalCents,
-      dateTimeIso: result.transaction.createdAt,
-      cashierName: result.transaction.employee?.name ?? employee.name,
-      machineName: result.transaction.machine?.name ?? machine.name,
-      paymentMethod: result.transaction.paymentMethod,
-      relayOk: result.relayOk
-    });
-
-    if (!result.relayOk && result.relayError) {
-      setError(`Ticket creado, pero no se encendio relay: ${result.relayError}`);
-    } else {
-      setError(null);
+      setActivateMachineId(null);
+      setPreferredEncargoOrderId(null);
+      await loadDashboard();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible activar maquina";
+      const normalized = message.toLowerCase();
+      const isCashCapError = normalized.includes("caja al tope") || (normalized.includes("cash drop") && normalized.includes("venta"));
+      const userMessage = isCashCapError ? CASH_CAP_TOAST_MESSAGE : message;
+      setError(userMessage);
+      pushToast(userMessage, "error");
     }
-
-    setActivateMachineId(null);
-    setPreferredEncargoOrderId(null);
-    await loadDashboard();
   };
 
   const addTime = async (input: {
@@ -497,7 +520,7 @@ export function POSDashboard() {
     <main className="mx-auto min-h-screen max-w-[1400px] px-4 py-4 lg:px-8">
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/90 px-5 py-4 shadow-sm">
         <div>
-          <h1 className="text-2xl font-bold text-teal-900">La Burbuja POS</h1>
+          <h1 className="text-2xl font-bold text-teal-900">Punto Lavado POS</h1>
           <p className="text-sm text-slate-600">Cajero: {employee.name}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -581,6 +604,14 @@ export function POSDashboard() {
           onRefresh={loadDashboard}
           onError={setError}
           onShiftClosed={logout}
+        />
+      )}
+
+      {tab === "impresiones" && (
+        <PrintHistoryTab
+          sessionPin={sessionPin}
+          onError={setError}
+          onToast={pushToast}
         />
       )}
 
@@ -694,7 +725,6 @@ export function POSDashboard() {
         />
       )}
 
-      {ticketPreview && <TicketPreviewModal ticket={ticketPreview} onClose={() => setTicketPreview(null)} />}
     </main>
   );
 }

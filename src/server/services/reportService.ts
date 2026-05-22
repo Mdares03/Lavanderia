@@ -1,5 +1,7 @@
 import "server-only";
 
+import { formatInTimeZone } from "date-fns-tz";
+
 import { prisma } from "@/lib/db";
 import { clampRange, minutesBetween } from "@/lib/time";
 import { TRANSACTION_STATUS, type ServiceTypeValue } from "@/server/domain/constants";
@@ -9,6 +11,16 @@ import { getExpectedSafeBalanceCents } from "@/server/services/cashDropService";
 export type ReportRange = {
   from: Date;
   to: Date;
+};
+
+export type CsvFile = {
+  name: string;
+  content: string;
+};
+
+export type AnalyticsExportPack = {
+  timezone: string;
+  files: [CsvFile, CsvFile, CsvFile];
 };
 
 type SupportedPeriod = "today" | "yesterday" | "last_7" | "this_month" | "custom";
@@ -215,6 +227,54 @@ function calculateDeltaPct(current: number, baseline: number) {
   return Number((((current - baseline) / baseline) * 100).toFixed(2));
 }
 
+function escapeCsvCell(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const stringValue = String(value);
+  if (/[",\n\r]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, "\"\"")}"`;
+  }
+  return stringValue;
+}
+
+function buildCsv(headers: string[], rows: Array<Array<unknown>>) {
+  const lines = [headers.map((header) => escapeCsvCell(header)).join(",")];
+  for (const row of rows) {
+    lines.push(row.map((value) => escapeCsvCell(value)).join(","));
+  }
+  return lines.join("\n");
+}
+
+function toLocalDate(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "yyyy-MM-dd");
+}
+
+function toLocalHour(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "HH");
+}
+
+function toLocalDateTime(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "yyyy-MM-dd HH:mm:ssXXX");
+}
+
+async function getBusinessTimezone() {
+  const config = await prisma.appConfig.findUnique({ where: { id: 1 }, select: { timezone: true, currency: true } });
+  return {
+    timezone: config?.timezone?.trim() || "America/Monterrey",
+    currency: config?.currency?.trim().toUpperCase() || "MXN"
+  };
+}
+
+function formatMoneyFromCents(cents: number, currency: string) {
+  return new Intl.NumberFormat("es-MX", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(cents / 100);
+}
+
 export async function getKpiReport(input: { period: SupportedPeriod; range: ReportRange }) {
   const baselineRange = baselineRangeFor(input.period, input.range);
   const [current, baseline, currentCoverage, baselineCoverage] = await Promise.all([
@@ -362,9 +422,26 @@ export async function getOwnerBriefReport(input: { period: SupportedPeriod; rang
     .sort((a, b) => b - a)[0] ?? null;
 
   const readyNotCollectedCount = encargoOrders.filter((order) => order.status === "ready").length;
-  const plannedIncidents = incidents.filter((item) => item.reasonCode === "out_of_service");
-  const unplannedIncidents = incidents.filter((item) => item.reasonCode !== "out_of_service");
-  const totalIncidentMinutes = incidents.reduce((sum, item) => {
+  const machineIds = Array.from(new Set(incidents.map((item) => item.machineId)));
+  const machines = machineIds.length
+    ? await prisma.machine.findMany({
+        where: { id: { in: machineIds } },
+        select: { id: true, lastRelayTestOk: true, hardwareValidatedAt: true }
+      })
+    : [];
+  const machineById = new Map(machines.map((machine) => [machine.id, machine]));
+
+  const incidentsCountedForDowntime = incidents.filter((item) => {
+    if (item.reasonCode !== "channel_not_wired") {
+      return true;
+    }
+    const machine = machineById.get(item.machineId);
+    return Boolean(machine?.lastRelayTestOk || machine?.hardwareValidatedAt);
+  });
+
+  const plannedIncidents = incidentsCountedForDowntime.filter((item) => item.reasonCode === "out_of_service");
+  const unplannedIncidents = incidentsCountedForDowntime.filter((item) => item.reasonCode !== "out_of_service");
+  const totalIncidentMinutes = incidentsCountedForDowntime.reduce((sum, item) => {
     if (item.minutes && item.minutes > 0) {
       return sum + item.minutes;
     }
@@ -396,7 +473,7 @@ export async function getOwnerBriefReport(input: { period: SupportedPeriod; rang
       voidedCount: voided._count._all,
       voidedTotalCents: voided._sum.amountCents ?? 0,
       relayFailureCount: relayFailures,
-      availabilityIncidentsCount: incidents.length,
+      availabilityIncidentsCount: incidentsCountedForDowntime.length,
       plannedIncidentsCount: plannedIncidents.length,
       unplannedIncidentsCount: unplannedIncidents.length,
       totalDowntimeMinutes: totalIncidentMinutes
@@ -415,7 +492,7 @@ export async function getOwnerBriefReport(input: { period: SupportedPeriod; rang
       status: "not_configured",
       message: "Pendiente de configurar backup automatico diario"
     },
-    availabilityTimeline: incidents.map((item) => ({
+    availabilityTimeline: incidentsCountedForDowntime.map((item) => ({
       incidentId: item.id,
       machineId: item.machineId,
       relayChannel: item.relayChannel,
@@ -552,6 +629,433 @@ export async function getUtilizationReport(range: ReportRange) {
       utilizationPct
     };
   });
+}
+
+export async function getAnalyticsExportPack(range: ReportRange): Promise<AnalyticsExportPack> {
+  const { timezone, currency } = await getBusinessTimezone();
+
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      createdAt: {
+        gte: range.from,
+        lte: range.to
+      }
+    },
+    include: {
+      machine: {
+        select: { id: true, name: true }
+      },
+      employee: {
+        select: { id: true, name: true }
+      },
+      customer: {
+        select: { id: true, firstName: true, lastName: true, phone: true, email: true }
+      },
+      voidedByEmployee: {
+        select: { id: true }
+      }
+    },
+    orderBy: { createdAt: "asc" }
+  });
+
+  const transactionRows = transactions.map((tx) => {
+    const createdDateLocal = toLocalDate(tx.createdAt, timezone);
+    const createdHourLocal = Number(toLocalHour(tx.createdAt, timezone));
+    return [
+      tx.id,
+      tx.ticketNumber,
+      tx.machineId,
+      tx.machine.name,
+      tx.employeeId,
+      tx.employee.name,
+      tx.customerId,
+      tx.customer.firstName,
+      tx.customer.lastName,
+      tx.customer.phone,
+      tx.customer.email,
+      tx.status,
+      tx.serviceType,
+      tx.paymentMethod,
+      tx.isExtension,
+      tx.parentTransactionId,
+      tx.encargoOrderId,
+      tx.baseAmountCents,
+      formatMoneyFromCents(tx.baseAmountCents, currency),
+      tx.discountCents,
+      formatMoneyFromCents(tx.discountCents, currency),
+      tx.addonAmountCents,
+      formatMoneyFromCents(tx.addonAmountCents, currency),
+      tx.amountCents,
+      formatMoneyFromCents(tx.amountCents, currency),
+      tx.createdAt.toISOString(),
+      toLocalDateTime(tx.createdAt, timezone),
+      createdDateLocal,
+      createdHourLocal,
+      tx.startedAt.toISOString(),
+      tx.expectedEndAt.toISOString(),
+      tx.endedAt?.toISOString() ?? null,
+      tx.voidedAt?.toISOString() ?? null,
+      tx.voidReason,
+      tx.voidReasonCode,
+      tx.voidReasonNotes,
+      tx.voidedByEmployee?.id ?? tx.voidedByEmployeeId,
+      tx.relayFailureReason
+    ];
+  });
+
+  const transactionsCsv = buildCsv(
+    [
+      "transaction_id",
+      "ticket_number",
+      "machine_id",
+      "machine_name",
+      "employee_id",
+      "employee_name",
+      "customer_id",
+      "customer_first_name",
+      "customer_last_name",
+      "customer_phone",
+      "customer_email",
+      "status",
+      "service_type",
+      "payment_method",
+      "is_extension",
+      "parent_transaction_id",
+      "encargo_order_id",
+      "base_amount_cents",
+      "base_amount",
+      "discount_cents",
+      "discount_amount",
+      "addon_amount_cents",
+      "addon_amount",
+      "amount_cents",
+      "amount",
+      "created_at_utc",
+      "created_at_local",
+      "date_local",
+      "hour_local",
+      "started_at_utc",
+      "expected_end_at_utc",
+      "ended_at_utc",
+      "voided_at_utc",
+      "void_reason",
+      "void_reason_code",
+      "void_reason_notes",
+      "voided_by_employee_id",
+      "relay_failure_reason"
+    ],
+    transactionRows
+  );
+
+  type BreakdownAgg = {
+    grain: "hourly" | "daily";
+    bucketStartLocal: string;
+    dateLocal: string;
+    hourLocal: string;
+    status: string;
+    serviceType: string;
+    paymentMethod: string;
+    machineId: string;
+    machineName: string;
+    transactionCount: number;
+    amountCentsSum: number;
+    baseAmountCentsSum: number;
+    discountCentsSum: number;
+    addonAmountCentsSum: number;
+  };
+
+  const breakdownMap = new Map<string, BreakdownAgg>();
+  const upsertBreakdown = (input: Omit<BreakdownAgg, "transactionCount" | "amountCentsSum" | "baseAmountCentsSum" | "discountCentsSum" | "addonAmountCentsSum">, tx: (typeof transactions)[number]) => {
+    const key = [
+      input.grain,
+      input.bucketStartLocal,
+      input.status,
+      input.serviceType,
+      input.paymentMethod,
+      input.machineId
+    ].join("|");
+    const existing = breakdownMap.get(key) ?? {
+      ...input,
+      transactionCount: 0,
+      amountCentsSum: 0,
+      baseAmountCentsSum: 0,
+      discountCentsSum: 0,
+      addonAmountCentsSum: 0
+    };
+    existing.transactionCount += 1;
+    existing.amountCentsSum += tx.amountCents;
+    existing.baseAmountCentsSum += tx.baseAmountCents;
+    existing.discountCentsSum += tx.discountCents;
+    existing.addonAmountCentsSum += tx.addonAmountCents;
+    breakdownMap.set(key, existing);
+  };
+
+  for (const tx of transactions) {
+    const dateLocal = toLocalDate(tx.createdAt, timezone);
+    const hourLocal = toLocalHour(tx.createdAt, timezone);
+    upsertBreakdown(
+      {
+        grain: "hourly",
+        bucketStartLocal: `${dateLocal} ${hourLocal}:00:00`,
+        dateLocal,
+        hourLocal,
+        status: tx.status,
+        serviceType: tx.serviceType,
+        paymentMethod: tx.paymentMethod,
+        machineId: tx.machineId,
+        machineName: tx.machine.name
+      },
+      tx
+    );
+    upsertBreakdown(
+      {
+        grain: "daily",
+        bucketStartLocal: `${dateLocal} 00:00:00`,
+        dateLocal,
+        hourLocal: "",
+        status: tx.status,
+        serviceType: tx.serviceType,
+        paymentMethod: tx.paymentMethod,
+        machineId: tx.machineId,
+        machineName: tx.machine.name
+      },
+      tx
+    );
+  }
+
+  const breakdownRows = Array.from(breakdownMap.values())
+    .sort((a, b) => {
+      if (a.grain !== b.grain) {
+        return a.grain.localeCompare(b.grain);
+      }
+      if (a.bucketStartLocal !== b.bucketStartLocal) {
+        return a.bucketStartLocal.localeCompare(b.bucketStartLocal);
+      }
+      return a.machineName.localeCompare(b.machineName);
+    })
+    .map((row) => [
+      row.grain,
+      row.bucketStartLocal,
+      row.dateLocal,
+      row.hourLocal || null,
+      row.status,
+      row.serviceType,
+      row.paymentMethod,
+      row.machineId,
+      row.machineName,
+      row.transactionCount,
+      row.amountCentsSum,
+      formatMoneyFromCents(row.amountCentsSum, currency),
+      row.baseAmountCentsSum,
+      formatMoneyFromCents(row.baseAmountCentsSum, currency),
+      row.discountCentsSum,
+      formatMoneyFromCents(row.discountCentsSum, currency),
+      row.addonAmountCentsSum,
+      formatMoneyFromCents(row.addonAmountCentsSum, currency)
+    ]);
+
+  const breakdownsCsv = buildCsv(
+    [
+      "grain",
+      "bucket_start_local",
+      "date_local",
+      "hour_local",
+      "status",
+      "service_type",
+      "payment_method",
+      "machine_id",
+      "machine_name",
+      "transaction_count",
+      "amount_cents_sum",
+      "amount_sum",
+      "base_amount_cents_sum",
+      "base_amount_sum",
+      "discount_cents_sum",
+      "discount_sum",
+      "addon_amount_cents_sum",
+      "addon_amount_sum"
+    ],
+    breakdownRows
+  );
+
+  const totalsByStatus = new Map<string, { count: number; amountCents: number }>();
+  const totalsByPayment = new Map<string, { count: number; amountCents: number }>();
+  const totalsByService = new Map<string, { count: number; amountCents: number }>();
+  let totalAmountCents = 0;
+  for (const tx of transactions) {
+    totalAmountCents += tx.amountCents;
+
+    const statusTotals = totalsByStatus.get(tx.status) ?? { count: 0, amountCents: 0 };
+    statusTotals.count += 1;
+    statusTotals.amountCents += tx.amountCents;
+    totalsByStatus.set(tx.status, statusTotals);
+
+    const paymentTotals = totalsByPayment.get(tx.paymentMethod) ?? { count: 0, amountCents: 0 };
+    paymentTotals.count += 1;
+    paymentTotals.amountCents += tx.amountCents;
+    totalsByPayment.set(tx.paymentMethod, paymentTotals);
+
+    const serviceTotals = totalsByService.get(tx.serviceType) ?? { count: 0, amountCents: 0 };
+    serviceTotals.count += 1;
+    serviceTotals.amountCents += tx.amountCents;
+    totalsByService.set(tx.serviceType, serviceTotals);
+  }
+
+  const metadataRows: Array<Array<unknown>> = [
+    ["context", "from", range.from.toISOString()],
+    ["context", "to", range.to.toISOString()],
+    ["context", "timezone", timezone],
+    ["context", "currency", currency],
+    ["context", "generated_at", new Date().toISOString()],
+    ["totals", "transaction_count", transactions.length],
+    ["totals", "amount_cents_sum", totalAmountCents],
+    ["totals", "amount_sum", formatMoneyFromCents(totalAmountCents, currency)]
+  ];
+
+  for (const [status, totals] of Array.from(totalsByStatus.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    metadataRows.push(["by_status", `${status}.transaction_count`, totals.count]);
+    metadataRows.push(["by_status", `${status}.amount_cents_sum`, totals.amountCents]);
+    metadataRows.push(["by_status", `${status}.amount_sum`, formatMoneyFromCents(totals.amountCents, currency)]);
+  }
+  for (const [paymentMethod, totals] of Array.from(totalsByPayment.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    metadataRows.push(["by_payment_method", `${paymentMethod}.transaction_count`, totals.count]);
+    metadataRows.push(["by_payment_method", `${paymentMethod}.amount_cents_sum`, totals.amountCents]);
+    metadataRows.push(["by_payment_method", `${paymentMethod}.amount_sum`, formatMoneyFromCents(totals.amountCents, currency)]);
+  }
+  for (const [serviceType, totals] of Array.from(totalsByService.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    metadataRows.push(["by_service_type", `${serviceType}.transaction_count`, totals.count]);
+    metadataRows.push(["by_service_type", `${serviceType}.amount_cents_sum`, totals.amountCents]);
+    metadataRows.push(["by_service_type", `${serviceType}.amount_sum`, formatMoneyFromCents(totals.amountCents, currency)]);
+  }
+
+  const metadataCsv = buildCsv(["section", "key", "value"], metadataRows);
+
+  return {
+    timezone,
+    files: [
+      { name: "transactions.csv", content: transactionsCsv },
+      { name: "breakdowns.csv", content: breakdownsCsv },
+      { name: "metadata_totals.csv", content: metadataCsv }
+    ]
+  };
+}
+
+function buildCrc32Table() {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+}
+
+const CRC32_TABLE = buildCrc32Table();
+
+function crc32(bytes: Uint8Array) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function msDosDateTime(input: Date) {
+  const year = Math.max(1980, input.getUTCFullYear());
+  const month = input.getUTCMonth() + 1;
+  const day = input.getUTCDate();
+  const hour = input.getUTCHours();
+  const minute = input.getUTCMinutes();
+  const second = Math.floor(input.getUTCSeconds() / 2);
+
+  const dosTime = (hour << 11) | (minute << 5) | second;
+  const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+  return { dosDate, dosTime };
+}
+
+function asUint8Array(chunks: Uint8Array[]) {
+  const size = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+export function buildZipBundle(files: CsvFile[]): Uint8Array {
+  const encoder = new TextEncoder();
+  const now = new Date();
+  const localChunks: Uint8Array[] = [];
+  const centralChunks: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const filename = encoder.encode(file.name);
+    const content = encoder.encode(file.content);
+    const checksum = crc32(content);
+    const { dosDate, dosTime } = msDosDateTime(now);
+
+    const localHeader = new Uint8Array(30 + filename.length);
+    const localView = new DataView(localHeader.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, dosTime, true);
+    localView.setUint16(12, dosDate, true);
+    localView.setUint32(14, checksum, true);
+    localView.setUint32(18, content.length, true);
+    localView.setUint32(22, content.length, true);
+    localView.setUint16(26, filename.length, true);
+    localView.setUint16(28, 0, true);
+    localHeader.set(filename, 30);
+
+    localChunks.push(localHeader, content);
+
+    const centralHeader = new Uint8Array(46 + filename.length);
+    const centralView = new DataView(centralHeader.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, dosTime, true);
+    centralView.setUint16(14, dosDate, true);
+    centralView.setUint32(16, checksum, true);
+    centralView.setUint32(20, content.length, true);
+    centralView.setUint32(24, content.length, true);
+    centralView.setUint16(28, filename.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    centralHeader.set(filename, 46);
+
+    centralChunks.push(centralHeader);
+    offset += localHeader.length + content.length;
+  }
+
+  const centralDir = asUint8Array(centralChunks);
+  const localDir = asUint8Array(localChunks);
+
+  const endRecord = new Uint8Array(22);
+  const endView = new DataView(endRecord.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, files.length, true);
+  endView.setUint16(10, files.length, true);
+  endView.setUint32(12, centralDir.length, true);
+  endView.setUint32(16, localDir.length, true);
+  endView.setUint16(20, 0, true);
+
+  return asUint8Array([localDir, centralDir, endRecord]);
 }
 
 export async function getReportCsv(range: ReportRange) {

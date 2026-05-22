@@ -15,7 +15,7 @@ async function main() {
     update: {},
     create: {
       id: 1,
-      businessName: "La Burbuja",
+      businessName: "Punto Lavado",
       timezone: "America/Monterrey",
       currency: "MXN",
       serialPortPath: "COM3",

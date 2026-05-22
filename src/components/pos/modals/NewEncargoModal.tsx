@@ -29,8 +29,7 @@ export function NewEncargoModal({ employeeId, onClose, onCreated }: NewEncargoMo
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [newCustomerEmail, setNewCustomerEmail] = useState("");
 
-  const [weightKg, setWeightKg] = useState(1);
-  const [loads, setLoads] = useState(1);
+  const [weightKgInput, setWeightKgInput] = useState("1");
   const [notes, setNotes] = useState("");
   const [paymentMode, setPaymentMode] = useState<"now" | "pickup">("now");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -60,13 +59,20 @@ export function NewEncargoModal({ employeeId, onClose, onCreated }: NewEncargoMo
     return () => window.clearTimeout(id);
   }, [customerQuery]);
 
+  const parsedWeightKg = Number(weightKgInput.replace(",", "."));
+  const normalizedWeightKg = Number.isFinite(parsedWeightKg) ? parsedWeightKg : 0;
+  const estimatedLoads = Math.max(
+    1,
+    Math.ceil(Math.max(0, normalizedWeightKg) / Math.max(pricing?.washerNormalCapacityKg ?? 5, 0.1))
+  );
+
   const estimatedPriceCents = useMemo(() => {
     if (!pricing) {
       return 0;
     }
-    const raw = Math.round(Math.max(0, weightKg) * pricing.encargoPricePerKgCents);
+    const raw = Math.round(Math.max(0, normalizedWeightKg) * pricing.encargoPricePerKgCents);
     return Math.max(raw, pricing.encargoMinimumChargeCents);
-  }, [pricing, weightKg]);
+  }, [normalizedWeightKg, pricing]);
 
   const registerCustomer = async () => {
     setCreatingCustomer(true);
@@ -180,24 +186,17 @@ export function NewEncargoModal({ employeeId, onClose, onCreated }: NewEncargoMo
             <label className="grid gap-1">
               <span className="text-sm text-slate-700">Peso (kg)</span>
               <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={weightKg}
-                onChange={(event) => setWeightKg(Math.max(0.1, Number(event.target.value || 0.1)))}
+                type="text"
+                inputMode="decimal"
+                value={weightKgInput}
+                onChange={(event) => setWeightKgInput(event.target.value)}
                 className="rounded-xl border border-slate-300 px-3 py-2"
               />
             </label>
-            <label className="grid gap-1">
-              <span className="text-sm text-slate-700">No. cargas</span>
-              <input
-                type="number"
-                min={1}
-                value={loads}
-                onChange={(event) => setLoads(Math.max(1, Number(event.target.value || 1)))}
-                className="rounded-xl border border-slate-300 px-3 py-2"
-              />
-            </label>
+            <div className="grid gap-1">
+              <span className="text-sm text-slate-700">No. cargas (auto)</span>
+              <div className="rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 text-slate-800">{estimatedLoads}</div>
+            </div>
           </div>
 
           <label className="grid gap-1">
@@ -255,7 +254,10 @@ export function NewEncargoModal({ employeeId, onClose, onCreated }: NewEncargoMo
                 setCustomerError("Selecciona o registra un cliente antes de crear el encargo");
                 return;
               }
-
+              if (!Number.isFinite(normalizedWeightKg) || normalizedWeightKg <= 0) {
+                setCustomerError("Ingresa un peso valido mayor a 0");
+                return;
+              }
               setSubmitting(true);
               try {
                 const payload = await apiFetch<{ order: EncargoOrder }>("/api/encargo-orders", {
@@ -263,8 +265,8 @@ export function NewEncargoModal({ employeeId, onClose, onCreated }: NewEncargoMo
                   body: JSON.stringify({
                     employeeId,
                     customerId: selectedCustomer.id,
-                    weightKg,
-                    loads,
+                    weightKg: normalizedWeightKg,
+                    loads: estimatedLoads,
                     notes: notes.trim() || undefined,
                     paymentMode,
                     paymentMethod: paymentMode === "now" ? paymentMethod : undefined

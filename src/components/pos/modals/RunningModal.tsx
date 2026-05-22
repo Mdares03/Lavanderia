@@ -32,8 +32,8 @@ function paymentLabel(value: PaymentMethod) {
 export function RunningModal({ machine, ticker, onClose, onAddTime, onVoidTransaction, onReleaseMachine }: RunningModalProps) {
   const [showExtendModal, setShowExtendModal] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
-  const [extraMinutes, setExtraMinutes] = useState(machine.transaction?.originalDurationMinutes ?? machine.defaultDurationMinutes);
-  const [extraAmountCents, setExtraAmountCents] = useState(0);
+  const [extraMinutesInput, setExtraMinutesInput] = useState(String(machine.transaction?.originalDurationMinutes ?? machine.defaultDurationMinutes));
+  const [extraAmountInput, setExtraAmountInput] = useState("0.00");
   const [extendPaymentMethod, setExtendPaymentMethod] = useState<PaymentMethod>("cash");
   const [voidReason, setVoidReason] = useState("");
   const [adminPin, setAdminPin] = useState("");
@@ -52,8 +52,8 @@ export function RunningModal({ machine, ticker, onClose, onAddTime, onVoidTransa
 
   const openExtend = () => {
     const suggestedMinutes = Math.max(1, transaction.originalDurationMinutes);
-    setExtraMinutes(suggestedMinutes);
-    setExtraAmountCents(Math.round(suggestedMinutes * perMinuteRateCents));
+    setExtraMinutesInput(String(suggestedMinutes));
+    setExtraAmountInput((Math.round(suggestedMinutes * perMinuteRateCents) / 100).toFixed(2));
     setExtendPaymentMethod("cash");
     setShowExtendModal(true);
   };
@@ -132,13 +132,16 @@ export function RunningModal({ machine, ticker, onClose, onAddTime, onVoidTransa
               <label className="grid gap-1">
                 <span className="text-sm text-slate-700">Minutos adicionales</span>
                 <input
-                  type="number"
-                  min={1}
-                  value={extraMinutes}
+                  type="text"
+                  inputMode="numeric"
+                  value={extraMinutesInput}
                   onChange={(event) => {
-                    const next = Math.max(1, Number(event.target.value || 1));
-                    setExtraMinutes(next);
-                    setExtraAmountCents(Math.max(0, Math.round(next * perMinuteRateCents)));
+                    const next = event.target.value;
+                    setExtraMinutesInput(next);
+                    const parsed = Number(next);
+                    if (Number.isFinite(parsed) && parsed >= 1) {
+                      setExtraAmountInput((Math.max(0, Math.round(parsed * perMinuteRateCents)) / 100).toFixed(2));
+                    }
                   }}
                   className="rounded-xl border border-slate-300 px-4 py-3 text-xl"
                 />
@@ -146,13 +149,11 @@ export function RunningModal({ machine, ticker, onClose, onAddTime, onVoidTransa
               <label className="grid gap-1">
                 <span className="text-sm text-slate-700">Cargo adicional (MXN)</span>
                 <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={(extraAmountCents / 100).toFixed(2)}
+                  type="text"
+                  inputMode="decimal"
+                  value={extraAmountInput}
                   onChange={(event) => {
-                    const parsed = Number(event.target.value || 0);
-                    setExtraAmountCents(Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100)) : 0);
+                    setExtraAmountInput(event.target.value);
                   }}
                   className="rounded-xl border border-slate-300 px-4 py-3 text-xl"
                 />
@@ -176,12 +177,20 @@ export function RunningModal({ machine, ticker, onClose, onAddTime, onVoidTransa
               </button>
               <button
                 onClick={async () => {
+                  const parsedMinutes = Number(extraMinutesInput);
+                  if (!Number.isFinite(parsedMinutes) || parsedMinutes < 1) {
+                    return;
+                  }
+                  const parsedAmount = Number(extraAmountInput.replace(",", "."));
+                  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+                    return;
+                  }
                   setSubmitting(true);
                   try {
                     await onAddTime({
                       transactionId: transaction.id,
-                      extraMinutes,
-                      extraAmountCents,
+                      extraMinutes: Math.round(parsedMinutes),
+                      extraAmountCents: Math.max(0, Math.round(parsedAmount * 100)),
                       paymentMethod: extendPaymentMethod
                     });
                     setShowExtendModal(false);

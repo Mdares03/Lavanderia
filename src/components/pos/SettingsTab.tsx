@@ -21,6 +21,74 @@ type SettingsTabProps = {
   onError: (value: string) => void;
 };
 
+type PricingDraft = {
+  washerNormalCycleMinutes: string;
+  washerXlCycleMinutes: string;
+  dryerNormalCycleMinutes: string;
+  dryerXlCycleMinutes: string;
+  selfServiceWashPriceMxn: string;
+  selfServiceDryPriceMxn: string;
+  selfServiceCycleMinutes: string;
+  encargoPricePerKgMxn: string;
+  encargoMinimumChargeMxn: string;
+  xlEdredonIndividualMxn: string;
+  xlEdredonMatrimonialMxn: string;
+  xlEdredonKingMxn: string;
+  xlCobijaGruesaMxn: string;
+  xlAlmohadaParMxn: string;
+  dryCleaningMinimumMxn: string;
+  dryCleaningUrgentSurchargePct: string;
+  detergentAddonMxn: string;
+  softenerAddonMxn: string;
+  bleachAddonMxn: string;
+  loyaltyEveryNTransactions: string;
+  loyaltyDiscountPct: string;
+  washerNormalCapacityKg: string;
+  washerXlCapacityKg: string;
+  ticketAutoPrintEnabled: boolean;
+  ticketPrinterTransport: string;
+  ticketPrinterEndpoint: string;
+  ticketPrinterProfile: string;
+  ticketPrinterTimeoutMs: string;
+};
+
+function toMoneyString(cents: number) {
+  return (cents / 100).toString();
+}
+
+function pricingToDraft(pricing: PricingVariables): PricingDraft {
+  return {
+    washerNormalCycleMinutes: String(pricing.washerNormalCycleMinutes),
+    washerXlCycleMinutes: String(pricing.washerXlCycleMinutes),
+    dryerNormalCycleMinutes: String(pricing.dryerNormalCycleMinutes),
+    dryerXlCycleMinutes: String(pricing.dryerXlCycleMinutes),
+    selfServiceWashPriceMxn: toMoneyString(pricing.selfServiceWashPriceCents),
+    selfServiceDryPriceMxn: toMoneyString(pricing.selfServiceDryPriceCents),
+    selfServiceCycleMinutes: String(pricing.selfServiceCycleMinutes),
+    encargoPricePerKgMxn: toMoneyString(pricing.encargoPricePerKgCents),
+    encargoMinimumChargeMxn: toMoneyString(pricing.encargoMinimumChargeCents),
+    xlEdredonIndividualMxn: toMoneyString(pricing.xlEdredonIndividualCents),
+    xlEdredonMatrimonialMxn: toMoneyString(pricing.xlEdredonMatrimonialCents),
+    xlEdredonKingMxn: toMoneyString(pricing.xlEdredonKingCents),
+    xlCobijaGruesaMxn: toMoneyString(pricing.xlCobijaGruesaCents),
+    xlAlmohadaParMxn: toMoneyString(pricing.xlAlmohadaParCents),
+    dryCleaningMinimumMxn: toMoneyString(pricing.dryCleaningMinimumCents),
+    dryCleaningUrgentSurchargePct: String(pricing.dryCleaningUrgentSurchargePct),
+    detergentAddonMxn: toMoneyString(pricing.detergentAddonCents),
+    softenerAddonMxn: toMoneyString(pricing.softenerAddonCents),
+    bleachAddonMxn: toMoneyString(pricing.bleachAddonCents),
+    loyaltyEveryNTransactions: String(pricing.loyaltyEveryNTransactions),
+    loyaltyDiscountPct: String(pricing.loyaltyDiscountPct),
+    washerNormalCapacityKg: String(pricing.washerNormalCapacityKg),
+    washerXlCapacityKg: String(pricing.washerXlCapacityKg),
+    ticketAutoPrintEnabled: pricing.ticketAutoPrintEnabled,
+    ticketPrinterTransport: pricing.ticketPrinterTransport,
+    ticketPrinterEndpoint: pricing.ticketPrinterEndpoint,
+    ticketPrinterProfile: pricing.ticketPrinterProfile,
+    ticketPrinterTimeoutMs: String(pricing.ticketPrinterTimeoutMs)
+  };
+}
+
 export function SettingsTab({ employee, adminPin, employees, onRefresh, onError }: SettingsTabProps) {
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeePin, setNewEmployeePin] = useState("");
@@ -44,14 +112,15 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
         type: "washer" | "dryer";
         size: "normal" | "xl";
         relayChannel: string;
-        price: number;
-        duration: number;
+        price: string;
+        duration: string;
         outOfService: boolean;
         isActive: boolean;
       }
     >
   >({});
   const [pricing, setPricing] = useState<PricingVariables | null>(null);
+  const [pricingDraft, setPricingDraft] = useState<PricingDraft | null>(null);
   const [customerQuery, setCustomerQuery] = useState("");
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [customersLoading, setCustomersLoading] = useState(false);
@@ -119,7 +188,10 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
         "x-admin-pin": adminPin
       }
     })
-      .then((payload) => setPricing(payload.pricing))
+      .then((payload) => {
+        setPricing(payload.pricing);
+        setPricingDraft(pricingToDraft(payload.pricing));
+      })
       .catch(() => undefined);
   }, [adminPin]);
 
@@ -149,8 +221,8 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
       type: machine.type,
       size: machine.size,
       relayChannel: machine.relayChannel?.toString() ?? "",
-      price: machine.defaultPriceCents / 100,
-      duration: machine.defaultDurationMinutes,
+      price: (machine.defaultPriceCents / 100).toString(),
+      duration: machine.defaultDurationMinutes.toString(),
       outOfService: machine.outOfService,
       isActive: machine.isActive
     };
@@ -274,26 +346,26 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
             <option value="xl">XL</option>
           </select>
           <input
-            type="number"
-            min={1}
+            type="text"
+            inputMode="decimal"
             value={draft.price}
             onChange={(event) =>
               setMachineDrafts((current) => ({
                 ...current,
-                [machine.id]: { ...draft, price: Number(event.target.value || 0) }
+                [machine.id]: { ...draft, price: event.target.value }
               }))
             }
             className="rounded-lg border border-slate-300 px-3 py-2"
             placeholder="Precio"
           />
           <input
-            type="number"
-            min={1}
+            type="text"
+            inputMode="numeric"
             value={draft.duration}
             onChange={(event) =>
               setMachineDrafts((current) => ({
                 ...current,
-                [machine.id]: { ...draft, duration: Number(event.target.value || 0) }
+                [machine.id]: { ...draft, duration: event.target.value }
               }))
             }
             className="rounded-lg border border-slate-300 px-3 py-2"
@@ -333,8 +405,18 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
             onClick={async () => {
               const relayValue = draft.relayChannel.trim();
               const relayChannel = relayValue.length === 0 ? null : Number(relayValue);
+              const parsedPrice = Number(draft.price.replace(",", "."));
+              const parsedDuration = Number(draft.duration);
               if (relayChannel !== null && (!Number.isInteger(relayChannel) || relayChannel < 1 || relayChannel > 63)) {
                 onError("Canal de relay invalido. Usa 1..63.");
+                return;
+              }
+              if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+                onError("Precio de maquina invalido");
+                return;
+              }
+              if (!Number.isFinite(parsedDuration) || parsedDuration <= 0) {
+                onError("Duracion de maquina invalida");
                 return;
               }
 
@@ -349,8 +431,8 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                     type: draft.type,
                     size: draft.size,
                     relayChannel,
-                    defaultPriceCents: Math.round(draft.price * 100),
-                    defaultDurationMinutes: Math.round(draft.duration),
+                    defaultPriceCents: Math.round(parsedPrice * 100),
+                    defaultDurationMinutes: Math.round(parsedDuration),
                     outOfService: draft.outOfService,
                     isActive: draft.isActive
                   })
@@ -433,16 +515,16 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
           <p className="mt-1 text-xs text-slate-600">Despues puedes sobrescribir una maquina individualmente.</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
             <input
-              type="number"
-              min={1}
+              type="text"
+              inputMode="decimal"
               value={bulkPrice}
               onChange={(event) => setBulkPrice(event.target.value)}
               className="rounded-lg border border-slate-300 px-3 py-2"
               placeholder="Precio global"
             />
             <input
-              type="number"
-              min={1}
+              type="text"
+              inputMode="numeric"
               value={bulkDuration}
               onChange={(event) => setBulkDuration(event.target.value)}
               className="rounded-lg border border-slate-300 px-3 py-2"
@@ -453,7 +535,7 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 const payload: { defaultPriceCents?: number; defaultDurationMinutes?: number } = {};
 
                 if (bulkPrice.trim().length > 0) {
-                  const parsedPrice = Number(bulkPrice);
+                  const parsedPrice = Number(bulkPrice.replace(",", "."));
                   if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
                     onError("Precio global invalido");
                     return;
@@ -561,16 +643,16 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
               <option value="xl">XL</option>
             </select>
             <input
-              type="number"
-              min={1}
+              type="text"
+              inputMode="decimal"
               value={newMachinePrice}
               onChange={(event) => setNewMachinePrice(event.target.value)}
               className="rounded-lg border border-slate-300 px-3 py-2"
               placeholder="Precio MXN"
             />
             <input
-              type="number"
-              min={1}
+              type="text"
+              inputMode="numeric"
               value={newMachineDuration}
               onChange={(event) => setNewMachineDuration(event.target.value)}
               className="rounded-lg border border-slate-300 px-3 py-2"
@@ -585,11 +667,13 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
             onClick={async () => {
               const relayValue = newMachineRelayChannel.trim();
               const relayChannel = relayValue.length === 0 ? null : Number(relayValue);
+              const parsedNewMachinePrice = Number(newMachinePrice.replace(",", "."));
+              const parsedNewMachineDuration = Number(newMachineDuration);
               if (!newMachineName.trim()) {
                 onError("Nombre de maquina requerido");
                 return;
               }
-              if (!newMachinePrice.trim() || Number(newMachinePrice) <= 0) {
+              if (!newMachinePrice.trim() || !Number.isFinite(parsedNewMachinePrice) || parsedNewMachinePrice <= 0) {
                 onError("Precio invalido");
                 return;
               }
@@ -609,8 +693,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                     type: newMachineType,
                     size: newMachineSize,
                     relayChannel,
-                    defaultPriceCents: Math.round(Number(newMachinePrice) * 100),
-                    defaultDurationMinutes: newMachineDuration.trim().length > 0 ? Math.round(Number(newMachineDuration)) : undefined,
+                    defaultPriceCents: Math.round(parsedNewMachinePrice * 100),
+                    defaultDurationMinutes:
+                      newMachineDuration.trim().length > 0 && Number.isFinite(parsedNewMachineDuration)
+                        ? Math.round(parsedNewMachineDuration)
+                        : undefined,
                     isActive: newMachineActive
                   })
                 });
@@ -904,7 +991,7 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
         )}
       </article>
 
-      {pricing && (
+      {pricing && pricingDraft && (
         <article className="rounded-2xl bg-white p-5 shadow-sm lg:col-span-2">
           <h2 className="text-xl font-bold text-slate-900">Variables de precio</h2>
           <p className="mt-1 text-xs text-slate-600">Configuracion por categoria de servicio</p>
@@ -915,13 +1002,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Lavadora normal (min)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.washerNormalCycleMinutes}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.washerNormalCycleMinutes}
                     onChange={(event) =>
-                      setPricing((current) =>
-                        current ? { ...current, washerNormalCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
-                      )
+                      setPricingDraft((current) => (current ? { ...current, washerNormalCycleMinutes: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -929,13 +1014,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Lavadora XL (min)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.washerXlCycleMinutes}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.washerXlCycleMinutes}
                     onChange={(event) =>
-                      setPricing((current) =>
-                        current ? { ...current, washerXlCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
-                      )
+                      setPricingDraft((current) => (current ? { ...current, washerXlCycleMinutes: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -943,13 +1026,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Secadora normal (min)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.dryerNormalCycleMinutes}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.dryerNormalCycleMinutes}
                     onChange={(event) =>
-                      setPricing((current) =>
-                        current ? { ...current, dryerNormalCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
-                      )
+                      setPricingDraft((current) => (current ? { ...current, dryerNormalCycleMinutes: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -957,13 +1038,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Secadora XL (min)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.dryerXlCycleMinutes}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.dryerXlCycleMinutes}
                     onChange={(event) =>
-                      setPricing((current) =>
-                        current ? { ...current, dryerXlCycleMinutes: Math.round(Number(event.target.value || 0)) } : current
-                      )
+                      setPricingDraft((current) => (current ? { ...current, dryerXlCycleMinutes: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -977,11 +1056,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Precio lavado (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.selfServiceWashPriceCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.selfServiceWashPriceMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, selfServiceWashPriceCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, selfServiceWashPriceMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -989,11 +1068,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Precio secado (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.selfServiceDryPriceCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.selfServiceDryPriceMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, selfServiceDryPriceCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, selfServiceDryPriceMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1001,11 +1080,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Minutos por ciclo</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.selfServiceCycleMinutes}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.selfServiceCycleMinutes}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, selfServiceCycleMinutes: Math.round(Number(event.target.value || 0)) } : current))
+                      setPricingDraft((current) => (current ? { ...current, selfServiceCycleMinutes: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1019,11 +1098,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Precio por kg (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.encargoPricePerKgCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.encargoPricePerKgMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, encargoPricePerKgCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, encargoPricePerKgMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1031,11 +1110,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Cobro minimo (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.encargoMinimumChargeCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.encargoMinimumChargeMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, encargoMinimumChargeCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, encargoMinimumChargeMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1044,16 +1123,101 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
             </article>
 
             <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <h3 className="text-sm font-semibold text-slate-800">Capacidad y Tickets</h3>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Capacidad lavadora normal (kg)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.washerNormalCapacityKg}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, washerNormalCapacityKg: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Capacidad lavadora XL (kg)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.washerXlCapacityKg}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, washerXlCapacityKg: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Endpoint impresora</span>
+                  <input
+                    type="text"
+                    value={pricingDraft.ticketPrinterEndpoint}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, ticketPrinterEndpoint: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Perfil impresora</span>
+                  <input
+                    type="text"
+                    value={pricingDraft.ticketPrinterProfile}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, ticketPrinterProfile: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Transporte</span>
+                  <input
+                    type="text"
+                    value={pricingDraft.ticketPrinterTransport}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, ticketPrinterTransport: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-medium text-slate-700">Timeout impresion (ms)</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.ticketPrinterTimeoutMs}
+                    onChange={(event) =>
+                      setPricingDraft((current) => (current ? { ...current, ticketPrinterTimeoutMs: event.target.value } : current))
+                    }
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <label className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={pricingDraft.ticketAutoPrintEnabled}
+                  onChange={(event) =>
+                    setPricingDraft((current) => (current ? { ...current, ticketAutoPrintEnabled: event.target.checked } : current))
+                  }
+                />
+                Auto-imprimir tickets al procesar orden
+              </label>
+            </article>
+
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <h3 className="text-sm font-semibold text-slate-800">Servicio 3: XL</h3>
               <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Edredon individual (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.xlEdredonIndividualCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.xlEdredonIndividualMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, xlEdredonIndividualCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, xlEdredonIndividualMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1061,11 +1225,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Edredon matrimonial (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.xlEdredonMatrimonialCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.xlEdredonMatrimonialMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, xlEdredonMatrimonialCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, xlEdredonMatrimonialMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1073,11 +1237,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Edredon king (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.xlEdredonKingCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.xlEdredonKingMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, xlEdredonKingCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, xlEdredonKingMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1085,11 +1249,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Cobija gruesa (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.xlCobijaGruesaCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.xlCobijaGruesaMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, xlCobijaGruesaCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, xlCobijaGruesaMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1097,11 +1261,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Par de almohadas (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.xlAlmohadaParCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.xlAlmohadaParMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, xlAlmohadaParCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, xlAlmohadaParMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1115,11 +1279,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Minimo tintoreria (MXN)</span>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.dryCleaningMinimumCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.dryCleaningMinimumMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, dryCleaningMinimumCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, dryCleaningMinimumMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1127,12 +1291,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Recargo urgente (%)</span>
                   <input
-                    type="number"
-                    min={0}
-                    max={300}
-                    value={pricing.dryCleaningUrgentSurchargePct}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.dryCleaningUrgentSurchargePct}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, dryCleaningUrgentSurchargePct: Math.round(Number(event.target.value || 0)) } : current))
+                      setPricingDraft((current) => (current ? { ...current, dryCleaningUrgentSurchargePct: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1146,11 +1309,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Detergente (MXN)</span>
                   <input
-                    type="number"
-                    min={0}
-                    value={pricing.detergentAddonCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.detergentAddonMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, detergentAddonCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, detergentAddonMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1158,11 +1321,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Suavizante (MXN)</span>
                   <input
-                    type="number"
-                    min={0}
-                    value={pricing.softenerAddonCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.softenerAddonMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, softenerAddonCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, softenerAddonMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1170,11 +1333,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Cloro (MXN)</span>
                   <input
-                    type="number"
-                    min={0}
-                    value={pricing.bleachAddonCents / 100}
+                    type="text"
+                    inputMode="decimal"
+                    value={pricingDraft.bleachAddonMxn}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, bleachAddonCents: Math.round(Number(event.target.value || 0) * 100) } : current))
+                      setPricingDraft((current) => (current ? { ...current, bleachAddonMxn: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1182,13 +1345,47 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <label className="grid gap-1 text-xs">
-                  <span className="font-medium text-slate-700">Cada N transacciones</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-slate-700">Cada N transacciones</span>
+                    <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 p-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPricingDraft((current) => {
+                            if (!current) return current;
+                            const currentValue = Number(current.loyaltyEveryNTransactions);
+                            const safeCurrent = Number.isFinite(currentValue) ? Math.round(currentValue) : 10;
+                            return { ...current, loyaltyEveryNTransactions: String(Math.max(1, safeCurrent - 1)) };
+                          })
+                        }
+                        className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 shadow-sm"
+                        title="Bajar frecuencia"
+                      >
+                        -1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPricingDraft((current) => {
+                            if (!current) return current;
+                            const currentValue = Number(current.loyaltyEveryNTransactions);
+                            const safeCurrent = Number.isFinite(currentValue) ? Math.round(currentValue) : 10;
+                            return { ...current, loyaltyEveryNTransactions: String(Math.min(200, safeCurrent + 1)) };
+                          })
+                        }
+                        className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 shadow-sm"
+                        title="Subir frecuencia"
+                      >
+                        +1
+                      </button>
+                    </div>
+                  </div>
                   <input
-                    type="number"
-                    min={1}
-                    value={pricing.loyaltyEveryNTransactions}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.loyaltyEveryNTransactions}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, loyaltyEveryNTransactions: Math.round(Number(event.target.value || 0)) } : current))
+                      setPricingDraft((current) => (current ? { ...current, loyaltyEveryNTransactions: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1196,12 +1393,11 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
                 <label className="grid gap-1 text-xs">
                   <span className="font-medium text-slate-700">Descuento de lealtad (%)</span>
                   <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={pricing.loyaltyDiscountPct}
+                    type="text"
+                    inputMode="numeric"
+                    value={pricingDraft.loyaltyDiscountPct}
                     onChange={(event) =>
-                      setPricing((current) => (current ? { ...current, loyaltyDiscountPct: Math.round(Number(event.target.value || 0)) } : current))
+                      setPricingDraft((current) => (current ? { ...current, loyaltyDiscountPct: event.target.value } : current))
                     }
                     className="rounded-xl border border-slate-300 px-3 py-2"
                   />
@@ -1213,13 +1409,74 @@ export function SettingsTab({ employee, adminPin, employees, onRefresh, onError 
             <button
               onClick={async () => {
                 try {
+                  const parseMoneyCents = (raw: string, label: string, allowZero = false) => {
+                    const parsed = Number(raw.trim().replace(",", "."));
+                    if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+                      throw new Error(`${label} invalido`);
+                    }
+                    return Math.round(parsed * 100);
+                  };
+                  const parseIntField = (raw: string, label: string, allowZero = false, max?: number) => {
+                    const parsed = Number(raw.trim());
+                    if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+                      throw new Error(`${label} invalido`);
+                    }
+                    if (typeof max === "number" && parsed > max) {
+                      throw new Error(`${label} invalido`);
+                    }
+                    return parsed;
+                  };
+                  const parseFloatField = (raw: string, label: string, allowZero = false, max?: number) => {
+                    const parsed = Number(raw.trim().replace(",", "."));
+                    if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+                      throw new Error(`${label} invalido`);
+                    }
+                    if (typeof max === "number" && parsed > max) {
+                      throw new Error(`${label} invalido`);
+                    }
+                    return Number(parsed.toFixed(2));
+                  };
+
+                  const nextPricing: PricingVariables = {
+                    washerNormalCycleMinutes: parseIntField(pricingDraft.washerNormalCycleMinutes, "Lavadora normal (min)"),
+                    washerXlCycleMinutes: parseIntField(pricingDraft.washerXlCycleMinutes, "Lavadora XL (min)"),
+                    dryerNormalCycleMinutes: parseIntField(pricingDraft.dryerNormalCycleMinutes, "Secadora normal (min)"),
+                    dryerXlCycleMinutes: parseIntField(pricingDraft.dryerXlCycleMinutes, "Secadora XL (min)"),
+                    selfServiceWashPriceCents: parseMoneyCents(pricingDraft.selfServiceWashPriceMxn, "Precio lavado"),
+                    selfServiceDryPriceCents: parseMoneyCents(pricingDraft.selfServiceDryPriceMxn, "Precio secado"),
+                    selfServiceCycleMinutes: parseIntField(pricingDraft.selfServiceCycleMinutes, "Minutos por ciclo"),
+                    encargoPricePerKgCents: parseMoneyCents(pricingDraft.encargoPricePerKgMxn, "Precio por kg"),
+                    encargoMinimumChargeCents: parseMoneyCents(pricingDraft.encargoMinimumChargeMxn, "Cobro minimo"),
+                    xlEdredonIndividualCents: parseMoneyCents(pricingDraft.xlEdredonIndividualMxn, "Edredon individual"),
+                    xlEdredonMatrimonialCents: parseMoneyCents(pricingDraft.xlEdredonMatrimonialMxn, "Edredon matrimonial"),
+                    xlEdredonKingCents: parseMoneyCents(pricingDraft.xlEdredonKingMxn, "Edredon king"),
+                    xlCobijaGruesaCents: parseMoneyCents(pricingDraft.xlCobijaGruesaMxn, "Cobija gruesa"),
+                    xlAlmohadaParCents: parseMoneyCents(pricingDraft.xlAlmohadaParMxn, "Par de almohadas"),
+                    dryCleaningMinimumCents: parseMoneyCents(pricingDraft.dryCleaningMinimumMxn, "Minimo tintoreria"),
+                    dryCleaningUrgentSurchargePct: parseIntField(pricingDraft.dryCleaningUrgentSurchargePct, "Recargo urgente", true, 300),
+                    detergentAddonCents: parseMoneyCents(pricingDraft.detergentAddonMxn, "Detergente", true),
+                    softenerAddonCents: parseMoneyCents(pricingDraft.softenerAddonMxn, "Suavizante", true),
+                    bleachAddonCents: parseMoneyCents(pricingDraft.bleachAddonMxn, "Cloro", true),
+                    loyaltyEveryNTransactions: parseIntField(pricingDraft.loyaltyEveryNTransactions, "Cada N transacciones"),
+                    loyaltyDiscountPct: parseIntField(pricingDraft.loyaltyDiscountPct, "Descuento de lealtad", true, 100),
+                    washerNormalCapacityKg: parseFloatField(pricingDraft.washerNormalCapacityKg, "Capacidad lavadora normal", false, 100),
+                    washerXlCapacityKg: parseFloatField(pricingDraft.washerXlCapacityKg, "Capacidad lavadora XL", false, 100),
+                    ticketAutoPrintEnabled: pricingDraft.ticketAutoPrintEnabled,
+                    ticketPrinterTransport: pricingDraft.ticketPrinterTransport.trim(),
+                    ticketPrinterEndpoint: pricingDraft.ticketPrinterEndpoint.trim(),
+                    ticketPrinterProfile: pricingDraft.ticketPrinterProfile.trim(),
+                    ticketPrinterTimeoutMs: parseIntField(pricingDraft.ticketPrinterTimeoutMs, "Timeout impresion", false, 60000)
+                  };
+
                   await apiFetch("/api/settings/pricing", {
                     method: "PATCH",
                     headers: {
                       "x-admin-pin": adminPin
                     },
-                    body: JSON.stringify(pricing)
+                    body: JSON.stringify(nextPricing)
                   });
+                  setPricing(nextPricing);
+                  setPricingDraft(pricingToDraft(nextPricing));
                   await onRefresh();
                 } catch (error) {
                   onError(error instanceof Error ? error.message : "No fue posible actualizar variables de precio");

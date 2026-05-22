@@ -57,11 +57,33 @@ function EmptyGraph() {
   return <p className="text-sm text-slate-500">Sin datos reales en el periodo.</p>;
 }
 
-function MiniBars({ points, color = "#0f766e" }: { points: ValuePoint[]; color?: string }) {
+function MiniBars({
+  points,
+  color = "#0f766e",
+  valueFormatter,
+  maxBars = 12
+}: {
+  points: ValuePoint[];
+  color?: string;
+  valueFormatter?: (value: number) => string;
+  maxBars?: number;
+}) {
   if (points.length === 0) {
     return <EmptyGraph />;
   }
-  const sample = points.slice(-10);
+
+  const bucketSize = Math.max(1, Math.ceil(points.length / Math.max(1, maxBars)));
+  const sample: ValuePoint[] = [];
+  for (let i = 0; i < points.length; i += bucketSize) {
+    const chunk = points.slice(i, i + bucketSize);
+    const first = chunk[0];
+    const last = chunk[chunk.length - 1];
+    sample.push({
+      label: first.label === last.label ? first.label : `${first.label}-${last.label}`,
+      value: chunk.reduce((sum, point) => sum + point.value, 0)
+    });
+  }
+
   const max = Math.max(...sample.map((point) => point.value), 1);
 
   return (
@@ -71,7 +93,7 @@ function MiniBars({ points, color = "#0f766e" }: { points: ValuePoint[]; color?:
           key={point.label}
           className="min-w-0 flex-1 rounded-t"
           style={{ height: `${Math.max(10, (point.value / max) * 100)}%`, backgroundColor: color }}
-          title={`${point.label}: ${point.value}`}
+          title={`${point.label}: ${valueFormatter ? valueFormatter(point.value) : point.value}`}
         />
       ))}
     </div>
@@ -240,35 +262,40 @@ export function ReportsTab({
       title: "Ventas por hora",
       points: salesByHourPoints,
       color: "#0f766e",
-      summary: kpiReport ? formatCurrency(kpiReport.kpis.totalRevenueCents) : "—"
+      summary: kpiReport ? formatCurrency(kpiReport.kpis.totalRevenueCents) : "—",
+      compactValueFormatter: (value: number) => formatCurrency(value)
     },
     {
       id: "daily_sales",
       title: "Tendencia diaria",
       points: dailySalesPoints,
       color: "#1d4ed8",
-      summary: kpiReport ? `${kpiReport.kpis.dailySales.length} dias` : "—"
+      summary: kpiReport ? `${kpiReport.kpis.dailySales.length} dias` : "—",
+      compactValueFormatter: (value: number) => formatCurrency(value)
     },
     {
       id: "cycles_by_hour",
       title: "Ciclos por hora",
       points: cyclesByHourPoints,
       color: "#7c3aed",
-      summary: kpiReport ? `${kpiReport.kpis.transactionCount} transacciones` : "—"
+      summary: kpiReport ? `${kpiReport.kpis.transactionCount} transacciones` : "—",
+      compactValueFormatter: (value: number) => `${Math.round(value)}`
     },
     {
       id: "cycles_by_machine",
       title: "Ciclos por maquina",
       points: cyclesByMachinePoints,
       color: "#334155",
-      summary: kpiReport ? `${kpiReport.kpis.cyclesByMachine.length} maquinas` : "—"
+      summary: kpiReport ? `${kpiReport.kpis.cyclesByMachine.length} maquinas` : "—",
+      compactValueFormatter: (value: number) => `${Math.round(value)}`
     },
     {
       id: "downtime",
       title: "Downtime",
       points: downtimeTimelinePoints,
       color: "#dc2626",
-      summary: ownerBrief ? `${ownerBrief.exceptions.totalDowntimeMinutes} min` : "—"
+      summary: ownerBrief ? `${ownerBrief.exceptions.totalDowntimeMinutes} min` : "—",
+      compactValueFormatter: (value: number) => `${Math.round(value)} min`
     }
   ];
 
@@ -348,7 +375,7 @@ export function ReportsTab({
               {graphCards.map((graph) => (
                 <GraphCard key={graph.id} title={graph.title} compact>
                   <div className="space-y-3">
-                    <MiniBars points={graph.points} color={graph.color} />
+                    <MiniBars points={graph.points} color={graph.color} valueFormatter={graph.compactValueFormatter} />
                     <div className="flex items-center justify-between">
                       <p className="text-sm text-slate-600">{graph.summary}</p>
                       <button

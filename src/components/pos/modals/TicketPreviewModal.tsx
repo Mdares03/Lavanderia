@@ -65,7 +65,7 @@ export function TicketPreviewModal({ ticket, onClose }: TicketPreviewModalProps)
 
   const ticketText = useMemo(() => {
     const lines: string[] = [];
-    lines.push("LA BURBUJA POS");
+    lines.push("PUNTO LAVADO POS");
     lines.push("------------------------------");
     lines.push(`TICKET #${ticket.ticketNumber}`);
     lines.push("------------------------------");

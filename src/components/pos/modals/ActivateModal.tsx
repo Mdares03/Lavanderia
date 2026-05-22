@@ -1,9 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch } from "@/components/pos/api";
-import type { CustomerRecord, EncargoOrder, LoyaltyRule, Machine, PricingVariables, ServiceType } from "@/components/pos/types";
+import type {
+  CustomerRecord,
+  EncargoOrder,
+  LoyaltyRule,
+  Machine,
+  PricingVariables,
+  ServiceType,
+  WorkOrderPreview
+} from "@/components/pos/types";
 
 type ActivateModalProps = {
   machine: Machine;
@@ -19,6 +27,7 @@ type ActivateModalProps = {
       durationMinutes: number;
       serviceType: ServiceType;
       paymentMethod: "cash" | "card" | "transfer";
+      weightKg: number;
       encargoOrderId?: string;
       addons: {
         detergentQty: number;
@@ -52,12 +61,17 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer">("cash");
   const [submitting, setSubmitting] = useState(false);
   const [pricing, setPricing] = useState<PricingVariables | null>(null);
+  const [orderWeightKgInput, setOrderWeightKgInput] = useState("5");
+  const [assignmentPreview, setAssignmentPreview] = useState<WorkOrderPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [customerQuery, setCustomerQuery] = useState("");
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerRecord | null>(null);
   const [customerLoading, setCustomerLoading] = useState(false);
   const [customerError, setCustomerError] = useState<string | null>(null);
+  const [encargoCalcError, setEncargoCalcError] = useState<string | null>(null);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [newCustomerFirstName, setNewCustomerFirstName] = useState("");
   const [newCustomerLastName, setNewCustomerLastName] = useState("");
@@ -68,7 +82,8 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
     discountPct: 50
   });
 
-  const [encargoWeightKg, setEncargoWeightKg] = useState(0);
+  const [encargoWeightKgInput, setEncargoWeightKgInput] = useState("0");
+  const [encargoPriceManuallyApplied, setEncargoPriceManuallyApplied] = useState(false);
   const [xlItems, setXlItems] = useState({
     individual: 0,
     matrimonial: 0,
@@ -83,6 +98,7 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
   });
 
   const activeEncargoOrders = useMemo(() => encargoOrders.filter((order) => order.status !== "picked_up"), [encargoOrders]);
+  const preferredOrderHydratedRef = useRef<string | null>(null);
   const customerScopedEncargoOrders = useMemo(() => {
     if (!selectedCustomer) {
       return activeEncargoOrders;
@@ -124,11 +140,12 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
   useEffect(() => {
     if (serviceType !== "encargo") {
       setSelectedEncargoOrderId("");
+      setEncargoPriceManuallyApplied(false);
     }
   }, [serviceType]);
 
   useEffect(() => {
-    if (serviceType !== "encargo" || !selectedCustomer || selectedEncargoOrderId) {
+    if (serviceType !== "encargo" || !selectedCustomer || selectedEncargoOrderId || encargoPriceManuallyApplied) {
       return;
     }
 
@@ -139,19 +156,25 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
 
     setSelectedEncargoOrderId(match.id);
     setBaseAmountCents(match.priceCents);
-  }, [activeEncargoOrders, selectedCustomer, selectedEncargoOrderId, serviceType]);
+  }, [activeEncargoOrders, encargoPriceManuallyApplied, selectedCustomer, selectedEncargoOrderId, serviceType]);
 
   useEffect(() => {
     if (!preferredEncargoOrderId) {
+      return;
+    }
+    if (preferredOrderHydratedRef.current === preferredEncargoOrderId) {
       return;
     }
     const selected = activeEncargoOrders.find((order) => order.id === preferredEncargoOrderId);
     if (!selected) {
       return;
     }
+    preferredOrderHydratedRef.current = preferredEncargoOrderId;
     setServiceType("encargo");
     setSelectedEncargoOrderId(selected.id);
     setBaseAmountCents(selected.priceCents);
+    setOrderWeightKgInput(selected.weightKg.toFixed(1));
+    setEncargoPriceManuallyApplied(false);
     hydrateCustomerFromOrder(selected);
     if (selected.customer) {
       setCustomerQuery(`${selected.customer.firstName} ${selected.customer.lastName}`.trim());
@@ -189,6 +212,37 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
 
     return () => window.clearTimeout(id);
   }, [customerQuery]);
+
+  useEffect(() => {
+    const parsedWeight = Number(orderWeightKgInput.replace(",", "."));
+    if (!Number.isFinite(parsedWeight) || parsedWeight <= 0) {
+      setAssignmentPreview(null);
+      setPreviewError("Ingresa un peso valido para calcular cargas");
+      return;
+    }
+
+    const id = window.setTimeout(() => {
+      setPreviewLoading(true);
+      setPreviewError(null);
+      apiFetch<WorkOrderPreview>("/api/orders/process/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          weightKg: parsedWeight,
+          serviceType
+        })
+      })
+        .then((payload) => {
+          setAssignmentPreview(payload);
+        })
+        .catch((error) => {
+          setAssignmentPreview(null);
+          setPreviewError(error instanceof Error ? error.message : "No fue posible calcular disponibilidad");
+        })
+        .finally(() => setPreviewLoading(false));
+    }, 220);
+
+    return () => window.clearTimeout(id);
+  }, [orderWeightKgInput, serviceType]);
 
   const xlTotal = useMemo(() => {
     if (!pricing) {
@@ -372,6 +426,46 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
               </div>
             </div>
 
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Asignacion por peso</p>
+              <label className="grid gap-1 text-xs">
+                <span className="font-medium text-slate-700">Peso total (kg)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={orderWeightKgInput}
+                  onChange={(event) => setOrderWeightKgInput(event.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2"
+                  placeholder="Ej. 17"
+                />
+              </label>
+              {previewLoading && <p className="mt-2 text-xs text-slate-500">Calculando asignacion...</p>}
+              {previewError && <p className="mt-2 text-xs text-red-700">{previewError}</p>}
+              {assignmentPreview?.shortage && (
+                <p className="mt-2 rounded-lg bg-amber-100 px-2 py-1 text-xs text-amber-900">
+                  Faltan lavadoras ({assignmentPreview.shortage.availableLoadsNow}/{assignmentPreview.shortage.requiredLoads}).
+                  {assignmentPreview.shortage.etaWhenEnoughWashers
+                    ? ` Disponibles aprox: ${new Date(assignmentPreview.shortage.etaWhenEnoughWashers).toLocaleString("es-MX")}`
+                    : " Sin ETA disponible."}
+                </p>
+              )}
+              {!!assignmentPreview && !assignmentPreview.shortage && (
+                <div className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900">
+                  <p className="font-semibold">
+                    Cargas: {assignmentPreview.requiredLoads} · Capacidad total: {assignmentPreview.totalCapacityKg.toFixed(1)} kg
+                  </p>
+                  <div className="mt-1 max-h-20 overflow-y-auto pr-1">
+                    {assignmentPreview.assignments.map((load) => (
+                      <p key={load.loadIndex}>
+                        L{load.loadIndex}: {load.washer.machineName}
+                        {load.dryer ? ` -> ${load.dryer.machineName}` : ""}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {pricing && serviceType === "encargo" && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Calculadora encargo</p>
@@ -382,10 +476,13 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
                     onChange={(event) => {
                       const nextId = event.target.value;
                       setSelectedEncargoOrderId(nextId);
+                      setEncargoPriceManuallyApplied(false);
+                      setEncargoCalcError(null);
                       const selected = activeEncargoOrders.find((order) => order.id === nextId);
                       if (selected) {
                         hydrateCustomerFromOrder(selected);
                         setBaseAmountCents(selected.priceCents);
+                        setOrderWeightKgInput(selected.weightKg.toFixed(1));
                         if (selected.customer) {
                           setCustomerQuery(`${selected.customer.firstName} ${selected.customer.lastName}`.trim());
                         } else if (selected.customerName) {
@@ -405,20 +502,26 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
                 </label>
                 <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                   <input
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={encargoWeightKg}
-                    onChange={(event) => setEncargoWeightKg(Number(event.target.value || 0))}
+                    type="text"
+                    inputMode="decimal"
+                    value={encargoWeightKgInput}
+                    onChange={(event) => setEncargoWeightKgInput(event.target.value)}
                     className="rounded-lg border border-slate-300 px-3 py-2"
                     placeholder="Peso (kg)"
                   />
                   <button
                     onClick={() => {
+                      const parsedWeightKg = Number(encargoWeightKgInput.replace(",", "."));
+                      if (!Number.isFinite(parsedWeightKg) || parsedWeightKg <= 0) {
+                        setEncargoCalcError("Ingresa un peso valido para calcular");
+                        return;
+                      }
                       const calculated = Math.max(
-                        Math.round(encargoWeightKg * pricing.encargoPricePerKgCents),
+                        Math.round(parsedWeightKg * pricing.encargoPricePerKgCents),
                         pricing.encargoMinimumChargeCents
                       );
+                      setEncargoCalcError(null);
+                      setEncargoPriceManuallyApplied(true);
                       setBaseAmountCents(calculated);
                     }}
                     className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white"
@@ -426,6 +529,7 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
                     Aplicar precio
                   </button>
                 </div>
+                {encargoCalcError && <p className="mt-2 text-xs text-red-700">{encargoCalcError}</p>}
               </div>
             )}
 
@@ -543,6 +647,15 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
                   setCustomerError("Selecciona o registra un cliente antes de activar");
                   return;
                 }
+                const parsedWeightKg = Number(orderWeightKgInput.replace(",", "."));
+                if (!Number.isFinite(parsedWeightKg) || parsedWeightKg <= 0) {
+                  setCustomerError("Ingresa un peso valido mayor a 0");
+                  return;
+                }
+                if (!assignmentPreview || !assignmentPreview.canProcess || assignmentPreview.shortage) {
+                  setCustomerError("No hay suficiente capacidad de lavadoras para procesar esta orden");
+                  return;
+                }
                 setSubmitting(true);
                 try {
                   await onConfirm(machine, {
@@ -552,15 +665,18 @@ export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId,
                     durationMinutes,
                     serviceType,
                     paymentMethod,
+                    weightKg: parsedWeightKg,
                     encargoOrderId: serviceType === "encargo" && selectedEncargoOrderId ? selectedEncargoOrderId : undefined,
                     addons
                   });
+                } catch (error) {
+                  setCustomerError(error instanceof Error ? error.message : "No fue posible activar maquina");
                 } finally {
                   setSubmitting(false);
                 }
               }}
               className="rounded-xl bg-teal-700 px-4 py-2.5 font-semibold text-white disabled:opacity-60"
-              disabled={submitting || !selectedCustomer}
+              disabled={submitting || !selectedCustomer || !!assignmentPreview?.shortage}
             >
               ACTIVAR
             </button>

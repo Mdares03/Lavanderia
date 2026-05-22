@@ -26,7 +26,14 @@ const pricingSchema = z.object({
   softenerAddonCents: z.number().int().min(0).max(10_000),
   bleachAddonCents: z.number().int().min(0).max(10_000),
   loyaltyEveryNTransactions: z.number().int().min(1).max(200),
-  loyaltyDiscountPct: z.number().int().min(0).max(100)
+  loyaltyDiscountPct: z.number().int().min(0).max(100),
+  washerNormalCapacityKg: z.number().positive().max(100),
+  washerXlCapacityKg: z.number().positive().max(100),
+  ticketAutoPrintEnabled: z.boolean(),
+  ticketPrinterTransport: z.string().min(2).max(100),
+  ticketPrinterEndpoint: z.string().min(4).max(500),
+  ticketPrinterProfile: z.string().min(2).max(120),
+  ticketPrinterTimeoutMs: z.number().int().min(1000).max(60000)
 });
 
 export async function GET() {
@@ -59,7 +66,14 @@ export async function GET() {
         softenerAddonCents: config.softenerAddonCents,
         bleachAddonCents: config.bleachAddonCents,
         loyaltyEveryNTransactions: config.loyaltyEveryNTransactions,
-        loyaltyDiscountPct: config.loyaltyDiscountPct
+        loyaltyDiscountPct: config.loyaltyDiscountPct,
+        washerNormalCapacityKg: config.washerNormalCapacityKg,
+        washerXlCapacityKg: config.washerXlCapacityKg,
+        ticketAutoPrintEnabled: config.ticketAutoPrintEnabled,
+        ticketPrinterTransport: config.ticketPrinterTransport,
+        ticketPrinterEndpoint: config.ticketPrinterEndpoint,
+        ticketPrinterProfile: config.ticketPrinterProfile,
+        ticketPrinterTimeoutMs: config.ticketPrinterTimeoutMs
       }
     });
   } catch (error) {

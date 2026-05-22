@@ -23,7 +23,16 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     if (data && typeof data === "object" && "error" in data) {
-      throw new Error(String((data as { error: unknown }).error));
+      const payload = data as { error: unknown; detail?: unknown };
+      const errorMessage = String(payload.error);
+      const detail = payload.detail;
+      if (typeof detail === "string" && detail.trim().length > 0) {
+        throw new Error(`${errorMessage}: ${detail}`);
+      }
+      if (detail && typeof detail === "object") {
+        throw new Error(`${errorMessage}: ${JSON.stringify(detail)}`);
+      }
+      throw new Error(errorMessage);
     }
     if (typeof data === "string" && data.length > 0) {
       throw new Error(data);

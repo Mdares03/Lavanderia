@@ -1,8 +1,8 @@
-# La Burbuja — Pricing System Prompt
+# Punto Lavado — Pricing System Prompt
 
 ## Business context
 
-La Burbuja is a laundromat in Santa Catarina, Nuevo León (Monterrey metro). It operates three service lines: self-service, drop-off (encargo), and dry cleaning (tintorería). The POS system must handle all three with distinct pricing logic.
+Punto Lavado is a laundromat in Santa Catarina, Nuevo León (Monterrey metro). It operates three service lines: self-service, drop-off (encargo), and dry cleaning (tintorería). The POS system must handle all three with distinct pricing logic.
 
 ---
 
@@ -80,7 +80,7 @@ Until a physical scale is purchased/connected, the system can generate a simulat
 
 ## Service line 3: Dry cleaning / tintorería
 
-**Pricing model:** Per-piece, fixed price by garment type. This is a future service line — prices are estimates based on Monterrey market research and will be confirmed before launch. Dry cleaning will likely be outsourced to a partner tintorería initially, with La Burbuja acting as a drop-off/pick-up point and adding a margin.
+**Pricing model:** Per-piece, fixed price by garment type. This is a future service line — prices are estimates based on Monterrey market research and will be confirmed before launch. Dry cleaning will likely be outsourced to a partner tintorería initially, with Punto Lavado acting as a drop-off/pick-up point and adding a margin.
 
 ### Estimated price list (MXN)
 

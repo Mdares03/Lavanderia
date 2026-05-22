@@ -45,6 +45,18 @@ export function getAdminPinFromRequest(request: Request) {
   return request.headers.get("x-admin-pin")?.trim() ?? "";
 }
 
+export function getSessionPinFromRequest(request: Request) {
+  return request.headers.get("x-session-pin")?.trim() ?? "";
+}
+
+export async function requireEmployeeFromRequest(request: Request) {
+  const pin = getSessionPinFromRequest(request);
+  if (!pin || pin.length !== 4) {
+    throw new Error("PIN de sesion requerido");
+  }
+  return loginWithPin(pin);
+}
+
 export async function requireAdminFromRequest(request: Request) {
   const pin = getAdminPinFromRequest(request);
   if (!pin || pin.length !== 4) {

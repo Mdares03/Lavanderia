@@ -27,6 +27,8 @@ model Machine {
   updatedAt              DateTime      @updatedAt
   transactions           Transaction[]
   availabilityIncidents  AvailabilityIncident[]
+  washerLoadAssignments  WorkOrderLoad[] @relation("WorkOrderLoadWasher")
+  dryerLoadAssignments   WorkOrderLoad[] @relation("WorkOrderLoadDryer")
 }
 
 model Employee {
@@ -49,6 +51,7 @@ model Employee {
   cashDrops     CashDrop[]     @relation("CashDropPerformedBy")
   approvedCashDropOverrides CashDrop[] @relation("CashDropApprovedBy")
   safeLedgerEvents SafeLedgerEvent[]
+  workOrders    WorkOrder[]
 }
 
 model Customer {
@@ -62,6 +65,7 @@ model Customer {
   updatedAt    DateTime      @updatedAt
   transactions Transaction[]
   encargoOrders EncargoOrder[]
+  workOrders    WorkOrder[]
 
   @@index([lastName, firstName])
 }
@@ -91,6 +95,10 @@ model Transaction {
   childTransactions      Transaction[]          @relation("TransactionParent")
   encargoOrderId         String?
   encargoOrder           EncargoOrder?          @relation(fields: [encargoOrderId], references: [id])
+  workOrderId            String?
+  workOrder              WorkOrder?             @relation(fields: [workOrderId], references: [id])
+  workOrderLoadId        String?                @unique
+  workOrderLoad          WorkOrderLoad?         @relation(fields: [workOrderLoadId], references: [id])
   startedAt              DateTime
   expectedEndAt          DateTime
   status                 String                 @default("pending_relay")
@@ -115,7 +123,61 @@ model Transaction {
   @@index([customerId])
   @@index([parentTransactionId])
   @@index([encargoOrderId])
+  @@index([workOrderId])
   @@index([voidedAt])
+}
+
+model WorkOrder {
+  id                String      @id @default(cuid())
+  orderNumber       Int         @unique
+  employeeId        String
+  employee          Employee    @relation(fields: [employeeId], references: [id])
+  customerId        String
+  customer          Customer    @relation(fields: [customerId], references: [id])
+  encargoOrderId    String?
+  encargoOrder      EncargoOrder? @relation(fields: [encargoOrderId], references: [id])
+  serviceType       String
+  paymentMethod     String
+  weightKg          Float
+  requiredLoads     Int
+  baseAmountCents   Int
+  discountCents     Int         @default(0)
+  loyaltyDiscountApplied Boolean @default(false)
+  addonDetergentQty Int         @default(0)
+  addonSoftenerQty  Int         @default(0)
+  addonBleachQty    Int         @default(0)
+  addonAmountCents  Int         @default(0)
+  amountCents       Int
+  status            String      @default("created")
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  loads             WorkOrderLoad[]
+  transactions      Transaction[]
+  printJobs         PrintJob[]
+
+  @@index([createdAt])
+  @@index([customerId])
+  @@index([employeeId])
+  @@index([encargoOrderId])
+}
+
+model WorkOrderLoad {
+  id              String      @id @default(cuid())
+  workOrderId     String
+  workOrder       WorkOrder   @relation(fields: [workOrderId], references: [id])
+  loadIndex       Int
+  washerMachineId String
+  washerMachine   Machine     @relation("WorkOrderLoadWasher", fields: [washerMachineId], references: [id])
+  dryerMachineId  String?
+  dryerMachine    Machine?    @relation("WorkOrderLoadDryer", fields: [dryerMachineId], references: [id])
+  status          String      @default("assigned")
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  transaction     Transaction?
+
+  @@unique([workOrderId, loadIndex])
+  @@index([washerMachineId])
+  @@index([dryerMachineId])
 }
 
 model TransactionExtension {
@@ -174,7 +236,7 @@ model CashMovement {
 
 model AppConfig {
   id                          Int      @id @default(1)
-  businessName                String   @default("La Burbuja")
+  businessName                String   @default("Punto Lavado")
   timezone                    String   @default("America/Monterrey")
   currency                    String   @default("MXN")
   serialPortPath              String   @default("COM3")
@@ -209,6 +271,13 @@ model AppConfig {
   cashDrawerCapCents           Int      @default(200000)
   cashDrawerSoftWarningPct     Int      @default(80)
   cashDropResidualCents        Int      @default(50000)
+  washerNormalCapacityKg       Float    @default(5)
+  washerXlCapacityKg           Float    @default(7)
+  ticketAutoPrintEnabled       Boolean  @default(true)
+  ticketPrinterTransport       String   @default("node_red_http")
+  ticketPrinterEndpoint        String   @default("http://127.0.0.1:1880/printer/jobs")
+  ticketPrinterProfile         String   @default("epson_tm_t20iii")
+  ticketPrinterTimeoutMs       Int      @default(7000)
   updatedAt                   DateTime @updatedAt
 }
 
@@ -234,11 +303,30 @@ model EncargoOrder {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
   transactions      Transaction[]
+  workOrders        WorkOrder[]
 
   @@index([status])
   @@index([receivedAt])
   @@index([createdByEmployeeId])
   @@index([customerId])
+}
+
+model PrintJob {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  ticketType  String
+  loadIndex   Int?
+  status      String    @default("pending")
+  payloadJson String
+  attemptCount Int      @default(0)
+  lastError   String?
+  printedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workOrderId, status])
+  @@index([ticketType, createdAt])
 }
 
 model AuditEvent {

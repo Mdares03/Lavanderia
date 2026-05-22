@@ -10,7 +10,7 @@ type LoginScreenProps = {
 export function LoginScreen({ pin, error, onPinChange, onLogin }: LoginScreenProps) {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
-      <h1 className="text-3xl font-bold text-teal-900">La Burbuja POS</h1>
+      <h1 className="text-3xl font-bold text-teal-900">Punto Lavado POS</h1>
       <p className="text-sm text-slate-600">Ingrese PIN para iniciar turno.</p>
       <input
         type="password"

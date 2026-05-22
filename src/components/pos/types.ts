@@ -322,6 +322,13 @@ export type PricingVariables = {
   bleachAddonCents: number;
   loyaltyEveryNTransactions: number;
   loyaltyDiscountPct: number;
+  washerNormalCapacityKg: number;
+  washerXlCapacityKg: number;
+  ticketAutoPrintEnabled: boolean;
+  ticketPrinterTransport: string;
+  ticketPrinterEndpoint: string;
+  ticketPrinterProfile: string;
+  ticketPrinterTimeoutMs: number;
 };
 
 export type TicketPreviewData = {
@@ -343,6 +350,101 @@ export type TicketPreviewData = {
   machineName: string;
   paymentMethod: PaymentMethod;
   relayOk: boolean;
+};
+
+export type WorkOrderPreview = {
+  canProcess: boolean;
+  requiredLoads: number;
+  totalCapacityKg: number;
+  assignments: Array<{
+    loadIndex: number;
+    washer: {
+      machineId: string;
+      machineName: string;
+      machineSize: "normal" | "xl";
+      capacityKg: number;
+      expectedEndAt: string;
+    };
+    dryer: {
+      machineId: string;
+      machineName: string;
+    } | null;
+  }>;
+  shortage: {
+    requiredLoads: number;
+    availableLoadsNow: number;
+    etaWhenEnoughWashers: string | null;
+  } | null;
+};
+
+export type WorkOrderProcessResult = {
+  workOrder: {
+    id: string;
+    orderNumber: number;
+    requiredLoads: number;
+    amountCents: number;
+    serviceType: ServiceType;
+    paymentMethod: PaymentMethod;
+    createdAt: string;
+    loads: Array<{
+      id: string;
+      loadIndex: number;
+      washerMachine: { id: string; name: string; size: "normal" | "xl" };
+      dryerMachine: { id: string; name: string; size: "normal" | "xl" } | null;
+      transaction: {
+        id: string;
+        ticketNumber: number;
+        status: string;
+        amountCents: number;
+        expectedEndAt: string;
+      } | null;
+    }>;
+    printJobs: Array<{
+      id: string;
+      ticketType: string;
+      status: string;
+      loadIndex: number | null;
+      lastError: string | null;
+      attemptCount: number;
+      createdAt: string;
+    }>;
+  } | null;
+  relayFailures: Array<{
+    transactionId: string;
+    ticketNumber: number;
+    error: string;
+  }>;
+  printFailures: Array<{
+    id: string;
+    error: string;
+  }>;
+};
+
+export type PrintJobStatus = "pending" | "printed" | "failed";
+export type PrintJobStatusFilter = "all" | PrintJobStatus;
+export type PrintJobTicketType = "master_customer" | "master_store" | "load_tag";
+
+export type PrintHistoryItem = {
+  id: string;
+  workOrderId: string;
+  workOrderNumber: number;
+  ticketType: PrintJobTicketType;
+  loadIndex: number | null;
+  status: PrintJobStatus;
+  attemptCount: number;
+  lastError: string | null;
+  printedAt: string | null;
+  createdAt: string;
+  ticketPreview: {
+    title: string;
+    text: string;
+  };
+};
+
+export type PrintHistoryResponse = {
+  items: PrintHistoryItem[];
+  hasMore: boolean;
+  nextCursor: string | null;
 };
 
 export type DashboardTransaction = {

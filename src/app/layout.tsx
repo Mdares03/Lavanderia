@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import "@/app/globals.css";
 
 export const metadata: Metadata = {
-  title: "La Burbuja POS",
+  title: "Punto Lavado POS",
   description: "Sistema local de lavanderia con control de relevadores"
 };
 

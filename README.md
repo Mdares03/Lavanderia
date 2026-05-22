@@ -1,4 +1,4 @@
-# La Burbuja POS
+# Punto Lavado POS
 
 Sistema local-first para lavanderia atendida, construido con Next.js + TypeScript + SQLite (Prisma), siguiendo [`North_star.md`](./North_star.md).
 

@@ -87,11 +87,11 @@ function exportShiftSummary(summary: ActiveShiftPayload["summary"], cashierName:
 }
 
 export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, onShiftClosed }: ShiftTabProps) {
-  const [startingCash, setStartingCash] = useState(0);
-  const [movementAmount, setMovementAmount] = useState(0);
+  const [startingCashInput, setStartingCashInput] = useState("0");
+  const [movementAmountInput, setMovementAmountInput] = useState("0");
   const [movementReason, setMovementReason] = useState("");
-  const [actualCash, setActualCash] = useState(0);
-  const [dropAmount, setDropAmount] = useState(0);
+  const [actualCashInput, setActualCashInput] = useState("0");
+  const [dropAmountInput, setDropAmountInput] = useState("");
   const [dropNotes, setDropNotes] = useState("");
   const [dropping, setDropping] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -103,8 +103,13 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
   const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [history, setHistory] = useState<ShiftHistoryItem[]>([]);
 
+  const startingCash = Number(startingCashInput.replace(",", "."));
+  const movementAmount = Number(movementAmountInput.replace(",", "."));
+  const actualCash = Number(actualCashInput.replace(",", "."));
+  const dropAmount = Number(dropAmountInput.replace(",", "."));
+
   const expectedCashCents = activeShift.summary?.totals.expectedCashCents ?? null;
-  const countedCashCents = Math.round(actualCash * 100);
+  const countedCashCents = Number.isFinite(actualCash) ? Math.round(actualCash * 100) : 0;
   const differenceCents = expectedCashCents === null ? null : countedCashCents - expectedCashCents;
   const differenceLabel = (differenceCents ?? 0) >= 0 ? "Sobrante" : "Faltante";
 
@@ -144,15 +149,19 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
         <p className="mt-2 text-sm text-slate-600">No hay turno abierto.</p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <input
-            type="number"
-            min={0}
-            value={startingCash}
-            onChange={(event) => setStartingCash(Number(event.target.value || 0))}
+            type="text"
+            inputMode="decimal"
+            value={startingCashInput}
+            onChange={(event) => setStartingCashInput(event.target.value)}
             className="rounded-xl border border-slate-300 px-4 py-3 text-xl"
             placeholder="Caja inicial"
           />
           <button
             onClick={async () => {
+              if (!Number.isFinite(startingCash) || startingCash < 0) {
+                onError("Caja inicial invalida");
+                return;
+              }
               try {
                 await apiFetch("/api/shifts/open", {
                   method: "POST",
@@ -228,10 +237,10 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
         <h2 className="text-xl font-bold text-slate-900">Movimientos de Caja</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_2fr_auto_auto]">
           <input
-            type="number"
-            min={1}
-            value={movementAmount}
-            onChange={(event) => setMovementAmount(Number(event.target.value || 0))}
+            type="text"
+            inputMode="decimal"
+            value={movementAmountInput}
+            onChange={(event) => setMovementAmountInput(event.target.value)}
             className="rounded-xl border border-slate-300 px-4 py-3"
             placeholder="Monto"
           />
@@ -258,7 +267,7 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
                     reason: movementReason.trim()
                   })
                 });
-                setMovementAmount(0);
+                setMovementAmountInput("0");
                 setMovementReason("");
                 await onRefresh();
               } catch (error) {
@@ -286,7 +295,7 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
                     reason: movementReason.trim()
                   })
                 });
-                setMovementAmount(0);
+                setMovementAmountInput("0");
                 setMovementReason("");
                 await onRefresh();
               } catch (error) {
@@ -324,10 +333,10 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
           <h3 className="text-sm font-semibold text-teal-900">Cash Drop a Safe</h3>
           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
             <input
-              type="number"
-              min={1}
-              value={dropAmount}
-              onChange={(event) => setDropAmount(Number(event.target.value || 0))}
+              type="text"
+              inputMode="decimal"
+              value={dropAmountInput}
+              onChange={(event) => setDropAmountInput(event.target.value)}
               className="rounded-xl border border-slate-300 px-4 py-3"
               placeholder={`Sugerido: ${Math.round(activeShift.summary.drawerControl.recommendedDropCents / 100)}`}
             />
@@ -342,19 +351,25 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
               onClick={async () => {
                 setDropping(true);
                 try {
+                  if (dropAmountInput.trim().length > 0 && (!Number.isFinite(dropAmount) || dropAmount <= 0)) {
+                    onError("Monto de drop invalido");
+                    return;
+                  }
                   await apiFetch("/api/shifts/drops", {
                     method: "POST",
                     body: JSON.stringify({
                       shiftId: activeShift.shift!.id,
                       employeeId: employee.id,
                       amountCents:
-                        dropAmount > 0 ? Math.round(dropAmount * 100) : activeShift.summary?.drawerControl.recommendedDropCents,
+                        Number.isFinite(dropAmount) && dropAmount > 0
+                          ? Math.round(dropAmount * 100)
+                          : activeShift.summary?.drawerControl.recommendedDropCents,
                       reason: activeShift.summary?.drawerControl.blockedAtCap ? "threshold" : "manual",
                       destination: "safe",
                       notes: dropNotes.trim() || undefined
                     })
                   });
-                  setDropAmount(0);
+                  setDropAmountInput("");
                   setDropNotes("");
                   await onRefresh();
                 } catch (error) {
@@ -434,10 +449,10 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <input
-            type="number"
-            min={0}
-            value={actualCash}
-            onChange={(event) => setActualCash(Number(event.target.value || 0))}
+            type="text"
+            inputMode="decimal"
+            value={actualCashInput}
+            onChange={(event) => setActualCashInput(event.target.value)}
             className="rounded-xl border border-slate-300 px-4 py-3 text-xl"
             placeholder="Efectivo contado"
           />
@@ -449,6 +464,10 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
           <button
             disabled={closing}
             onClick={async () => {
+              if (!Number.isFinite(actualCash) || actualCash < 0) {
+                onError("Efectivo contado invalido");
+                return;
+              }
               setClosing(true);
               try {
                 const payload = await apiFetch<{ shift: unknown; summary: ActiveShiftPayload["summary"] }>("/api/shifts/close", {
