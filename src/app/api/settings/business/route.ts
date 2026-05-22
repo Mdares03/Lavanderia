@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { requireAdminFromRequest } from "@/server/services/authService";
+import { writeAuditEvent } from "@/server/services/auditLog";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const patchSchema = z.object({
@@ -25,11 +26,27 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   await ensureSystemBootstrapped();
   try {
-    await requireAdminFromRequest(request);
+    const admin = await requireAdminFromRequest(request);
+    const previous = await prisma.appConfig.findUnique({ where: { id: 1 } });
     const payload = patchSchema.parse(await request.json());
     const config = await prisma.appConfig.update({
       where: { id: 1 },
       data: payload
+    });
+    await writeAuditEvent({
+      type: "settings_changed",
+      actorEmployeeId: admin.id,
+      payload: {
+        section: "business",
+        previous: previous
+          ? {
+              businessName: previous.businessName,
+              timezone: previous.timezone,
+              currency: previous.currency
+            }
+          : null,
+        next: payload
+      }
     });
     return ok({ config });
   } catch (error) {

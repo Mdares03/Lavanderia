@@ -10,8 +10,11 @@ import {
   type ServiceTypeValue
 } from "@/server/domain/constants";
 import { relayManager } from "@/server/relay/relayManager";
+import { writeAuditEvent } from "@/server/services/auditLog";
 import { loginWithPin } from "@/server/services/authService";
 import { calculateAddonTotalCents, calculateLoyaltyDiscountCents } from "@/server/services/calculations";
+import { getDrawerState } from "@/server/services/cashDropService";
+import { getActiveShift } from "@/server/services/shiftService";
 import { timerService } from "@/server/services/timerService";
 
 type ActivateMachineAddonsInput = {
@@ -33,6 +36,16 @@ export type ActivateMachineInput = {
 };
 
 export async function activateMachine(input: ActivateMachineInput) {
+  const activeShift = await getActiveShift();
+  if (activeShift) {
+    const drawerState = await getDrawerState(activeShift.id);
+    if (drawerState.blockedAtCap) {
+      throw new Error(
+        `Caja al tope (${(drawerState.currentCashCents / 100).toFixed(2)} MXN). Registra un cash drop antes de vender de nuevo.`
+      );
+    }
+  }
+
   const startedAt = new Date();
   const expectedEndAt = addMinutes(startedAt, input.durationMinutes);
 
@@ -170,11 +183,11 @@ export async function activateMachine(input: ActivateMachineInput) {
       if (!encargoOrder) {
         throw new Error("Encargo no encontrado");
       }
-      if (encargoOrder.status === ENCARGO_ORDER_STATUS.entregado) {
+      if (encargoOrder.status === ENCARGO_ORDER_STATUS.pickedUp) {
         throw new Error("No se puede activar maquina para un encargo entregado");
       }
 
-      const nextStatus = machine.type === "dryer" ? ENCARGO_ORDER_STATUS.secando : ENCARGO_ORDER_STATUS.lavando;
+      const nextStatus = ENCARGO_ORDER_STATUS.processing;
       await tx.encargoOrder.update({
         where: { id: encargoOrder.id },
         data: { status: nextStatus }
@@ -376,6 +389,8 @@ export async function addTimeToTransaction(input: {
 export async function voidTransaction(input: {
   transactionId: string;
   reason: string;
+  reasonCode?: string;
+  reasonNotes?: string;
   employeeId: string;
   adminPin?: string;
 }) {
@@ -431,6 +446,8 @@ export async function voidTransaction(input: {
     data: {
       status: TRANSACTION_STATUS.voided,
       voidReason: input.reason,
+      voidReasonCode: input.reasonCode ?? null,
+      voidReasonNotes: input.reasonNotes?.trim() || null,
       voidedAt: new Date(),
       voidedByEmployeeId: employee.id,
       endedAt: new Date(),
@@ -444,6 +461,18 @@ export async function voidTransaction(input: {
       data: { awaitingRelease: false }
     });
   }
+
+  await writeAuditEvent({
+    type: "void_created",
+    actorEmployeeId: employee.id,
+    payload: {
+      transactionId: transaction.id,
+      ticketNumber: transaction.ticketNumber,
+      amountCents: transaction.amountCents,
+      reason: input.reason,
+      reasonCode: input.reasonCode ?? null
+    }
+  });
 
   return updated;
 }

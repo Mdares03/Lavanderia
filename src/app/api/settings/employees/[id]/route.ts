@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { ensurePinAvailable, requireAdminFromRequest } from "@/server/services/authService";
+import { writeAuditEvent } from "@/server/services/auditLog";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const patchSchema = z.object({
@@ -58,6 +59,17 @@ export async function PATCH(request: Request, context: Context) {
     const employee = await prisma.employee.update({
       where: { id },
       data: payload
+    });
+    await writeAuditEvent({
+      type: "role_changed",
+      actorEmployeeId: requester.id,
+      payload: {
+        action: "employee_updated",
+        employeeId: employee.id,
+        changedFields: Object.keys(payload),
+        isAdmin: employee.isAdmin,
+        isActive: employee.isActive
+      }
     });
     return ok({ employee });
   } catch (error) {

@@ -7,12 +7,10 @@ import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const patchSchema = z.object({
   status: z.enum([
-    ENCARGO_ORDER_STATUS.recibido,
-    ENCARGO_ORDER_STATUS.lavando,
-    ENCARGO_ORDER_STATUS.secando,
-    ENCARGO_ORDER_STATUS.doblando,
-    ENCARGO_ORDER_STATUS.listo,
-    ENCARGO_ORDER_STATUS.entregado
+    ENCARGO_ORDER_STATUS.order,
+    ENCARGO_ORDER_STATUS.processing,
+    ENCARGO_ORDER_STATUS.ready,
+    ENCARGO_ORDER_STATUS.pickedUp
   ]),
   paymentMethod: z.enum(["cash", "card", "transfer"]).optional()
 });

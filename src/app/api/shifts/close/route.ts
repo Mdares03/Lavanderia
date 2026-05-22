@@ -6,8 +6,11 @@ import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const schema = z.object({
   shiftId: z.string(),
+  employeeId: z.string(),
   actualCashCents: z.number().int().min(0),
-  notes: z.string().max(300).optional()
+  notes: z.string().max(300).optional(),
+  varianceApprovedByEmployeeId: z.string().optional(),
+  varianceApprovalNote: z.string().max(300).optional()
 });
 
 export async function POST(request: Request) {

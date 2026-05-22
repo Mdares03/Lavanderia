@@ -48,7 +48,7 @@ function printShiftSummary(summary: ActiveShiftPayload["summary"], cashierName: 
         <p>Total ventas: ${formatCurrency(summary.totals.totalSalesCents)}</p>
         <p>Transacciones: ${summary.totals.transactionCount}</p>
         <p>Anuladas: ${summary.totals.voidedCount} (${formatCurrency(summary.totals.voidedTotalCents)})</p>
-        <p>Efectivo esperado: ${formatCurrency(summary.totals.expectedCashCents)}</p>
+        <p>Efectivo esperado: ${summary.totals.expectedCashCents === null ? "—" : formatCurrency(summary.totals.expectedCashCents)}</p>
       </body>
     </html>
   `;
@@ -73,7 +73,7 @@ function exportShiftSummary(summary: ActiveShiftPayload["summary"], cashierName:
     `Ventas: ${formatCurrency(summary.totals.totalSalesCents)}`,
     `Transacciones: ${summary.totals.transactionCount}`,
     `Anuladas: ${summary.totals.voidedCount} (${formatCurrency(summary.totals.voidedTotalCents)})`,
-    `Efectivo esperado: ${formatCurrency(summary.totals.expectedCashCents)}`
+    `Efectivo esperado: ${summary.totals.expectedCashCents === null ? "—" : formatCurrency(summary.totals.expectedCashCents)}`
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -91,6 +91,9 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
   const [movementAmount, setMovementAmount] = useState(0);
   const [movementReason, setMovementReason] = useState("");
   const [actualCash, setActualCash] = useState(0);
+  const [dropAmount, setDropAmount] = useState(0);
+  const [dropNotes, setDropNotes] = useState("");
+  const [dropping, setDropping] = useState(false);
   const [closing, setClosing] = useState(false);
   const [historyFrom, setHistoryFrom] = useState(() => {
     const d = new Date();
@@ -100,10 +103,10 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
   const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [history, setHistory] = useState<ShiftHistoryItem[]>([]);
 
-  const expectedCashCents = activeShift.summary?.totals.expectedCashCents ?? 0;
+  const expectedCashCents = activeShift.summary?.totals.expectedCashCents ?? null;
   const countedCashCents = Math.round(actualCash * 100);
-  const differenceCents = countedCashCents - expectedCashCents;
-  const differenceLabel = differenceCents >= 0 ? "Sobrante" : "Faltante";
+  const differenceCents = expectedCashCents === null ? null : countedCashCents - expectedCashCents;
+  const differenceLabel = (differenceCents ?? 0) >= 0 ? "Sobrante" : "Faltante";
 
   const paymentBreakdown = useMemo(() => {
     const rows = activeShift.summary?.totals.byPaymentMethod ?? [];
@@ -180,11 +183,23 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
         <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
           <p>Ventas: {formatCurrency(activeShift.summary.totals.totalSalesCents)}</p>
           <p>Transacciones: {activeShift.summary.totals.transactionCount}</p>
-          <p>Efectivo esperado: {formatCurrency(activeShift.summary.totals.expectedCashCents)}</p>
+          <p>
+            Efectivo esperado:{" "}
+            {activeShift.summary.totals.expectedCashCents === null ? "Oculto (blind close)" : formatCurrency(activeShift.summary.totals.expectedCashCents)}
+          </p>
           <p>Anuladas: {activeShift.summary.totals.voidedCount}</p>
           <p>Valor anulado: {formatCurrency(activeShift.summary.totals.voidedTotalCents)}</p>
           <p>Ventas en efectivo: {formatCurrency(activeShift.summary.totals.cashSalesCents)}</p>
         </div>
+        {activeShift.summary.drawerControl.needsWarning && (
+          <div
+            className={`mt-3 rounded-xl border px-3 py-2 text-sm ${activeShift.summary.drawerControl.blockedAtCap ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-800"}`}
+          >
+            {activeShift.summary.drawerControl.blockedAtCap
+              ? "Caja al tope: registra cash drop antes de la siguiente venta."
+              : "Caja cerca del tope: cash drop recomendado."}
+          </div>
+        )}
         <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <h3 className="text-sm font-semibold text-slate-800">Desglose por metodo de pago</h3>
           <ul className="mt-2 grid gap-1 text-sm">
@@ -194,6 +209,18 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
               </li>
             ))}
           </ul>
+        </div>
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+          <p>Cap de caja: {formatCurrency(activeShift.summary.drawerControl.capCents)}</p>
+          <p>Warning: {formatCurrency(activeShift.summary.drawerControl.softWarningCents)}</p>
+          <p>Residual sugerido: {formatCurrency(activeShift.summary.drawerControl.residualCents)}</p>
+          <p>Safe esperado: {formatCurrency(activeShift.summary.safeLedger.expectedBalanceCents)}</p>
+          <p>
+            Ultimo drop:{" "}
+            {activeShift.summary.safeLedger.lastDropAt
+              ? `${formatDateTime(activeShift.summary.safeLedger.lastDropAt)} (${formatCurrency(activeShift.summary.safeLedger.lastDropAmountCents ?? 0)})`
+              : "Sin drops"}
+          </p>
         </div>
       </article>
 
@@ -293,6 +320,55 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
             </tbody>
           </table>
         </div>
+        <div className="mt-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
+          <h3 className="text-sm font-semibold text-teal-900">Cash Drop a Safe</h3>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
+            <input
+              type="number"
+              min={1}
+              value={dropAmount}
+              onChange={(event) => setDropAmount(Number(event.target.value || 0))}
+              className="rounded-xl border border-slate-300 px-4 py-3"
+              placeholder={`Sugerido: ${Math.round(activeShift.summary.drawerControl.recommendedDropCents / 100)}`}
+            />
+            <input
+              value={dropNotes}
+              onChange={(event) => setDropNotes(event.target.value)}
+              className="rounded-xl border border-slate-300 px-4 py-3"
+              placeholder="Notas (opcional)"
+            />
+            <button
+              disabled={dropping}
+              onClick={async () => {
+                setDropping(true);
+                try {
+                  await apiFetch("/api/shifts/drops", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      shiftId: activeShift.shift!.id,
+                      employeeId: employee.id,
+                      amountCents:
+                        dropAmount > 0 ? Math.round(dropAmount * 100) : activeShift.summary?.drawerControl.recommendedDropCents,
+                      reason: activeShift.summary?.drawerControl.blockedAtCap ? "threshold" : "manual",
+                      destination: "safe",
+                      notes: dropNotes.trim() || undefined
+                    })
+                  });
+                  setDropAmount(0);
+                  setDropNotes("");
+                  await onRefresh();
+                } catch (error) {
+                  onError(error instanceof Error ? error.message : "No fue posible registrar cash drop");
+                } finally {
+                  setDropping(false);
+                }
+              }}
+              className="rounded-xl bg-teal-700 px-4 py-3 font-semibold text-white disabled:opacity-60"
+            >
+              {dropping ? "Registrando..." : "Registrar drop"}
+            </button>
+          </div>
+        </div>
       </article>
 
       <article className="rounded-2xl bg-white p-5 shadow-sm">
@@ -348,7 +424,14 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
           <p>Depositos: {formatCurrency(activeShift.summary.totals.depositsCents)}</p>
           <p>Retiros: {formatCurrency(activeShift.summary.totals.withdrawalsCents)}</p>
         </div>
-        <p className="mt-2 text-sm font-semibold">Efectivo esperado: {formatCurrency(activeShift.summary.totals.expectedCashCents)}</p>
+        <p className="mt-2 text-sm font-semibold">
+          Efectivo esperado:{" "}
+          {employee.isAdmin
+            ? activeShift.summary.totals.expectedCashCents !== null
+              ? formatCurrency(activeShift.summary.totals.expectedCashCents)
+              : "—"
+            : "Oculto hasta cerrar turno"}
+        </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <input
             type="number"
@@ -358,9 +441,11 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
             className="rounded-xl border border-slate-300 px-4 py-3 text-xl"
             placeholder="Efectivo contado"
           />
-          <p className={`text-sm font-semibold ${differenceCents >= 0 ? "text-emerald-700" : "text-red-700"}`}>
-            {differenceLabel}: {formatCurrency(Math.abs(differenceCents))}
-          </p>
+          {differenceCents !== null && (
+            <p className={`text-sm font-semibold ${differenceCents >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+              {differenceLabel}: {formatCurrency(Math.abs(differenceCents))}
+            </p>
+          )}
           <button
             disabled={closing}
             onClick={async () => {
@@ -370,7 +455,9 @@ export function ShiftTab({ employee, adminPin, activeShift, onRefresh, onError, 
                   method: "POST",
                   body: JSON.stringify({
                     shiftId: activeShift.shift!.id,
-                    actualCashCents: countedCashCents
+                    employeeId: employee.id,
+                    actualCashCents: countedCashCents,
+                    varianceApprovedByEmployeeId: employee.isAdmin ? employee.id : undefined
                   })
                 });
                 printShiftSummary(payload.summary, employee.name);

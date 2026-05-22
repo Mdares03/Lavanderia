@@ -7,8 +7,7 @@ import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 const createSchema = z
   .object({
     employeeId: z.string(),
-    customerName: z.string().max(120).optional(),
-    customerPhone: z.string().max(30).optional(),
+    customerId: z.string(),
     weightKg: z.number().positive(),
     loads: z.number().int().positive(),
     notes: z.string().max(300).optional(),

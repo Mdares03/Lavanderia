@@ -26,6 +26,7 @@ model Machine {
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   transactions           Transaction[]
+  availabilityIncidents  AvailabilityIncident[]
 }
 
 model Employee {
@@ -37,11 +38,17 @@ model Employee {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   shifts        Shift[]
+  closedShifts  Shift[]        @relation("ShiftClosedBy")
+  varianceApprovedShifts Shift[] @relation("ShiftVarianceApprovedBy")
   transactions  Transaction[]
   voidedTransactions Transaction[] @relation("TransactionVoidedBy")
   cashMovements CashMovement[]
   extensions    TransactionExtension[]
   encargoOrders EncargoOrder[] @relation("EncargoOrderCreatedBy")
+  auditEvents   AuditEvent[]
+  cashDrops     CashDrop[]     @relation("CashDropPerformedBy")
+  approvedCashDropOverrides CashDrop[] @relation("CashDropApprovedBy")
+  safeLedgerEvents SafeLedgerEvent[]
 }
 
 model Customer {
@@ -54,6 +61,7 @@ model Customer {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   transactions Transaction[]
+  encargoOrders EncargoOrder[]
 
   @@index([lastName, firstName])
 }
@@ -96,6 +104,8 @@ model Transaction {
   relayTurnedOffAt       DateTime?
   relayFailureReason     String?
   voidReason             String?
+  voidReasonCode         String?
+  voidReasonNotes        String?
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   extensions             TransactionExtension[]
@@ -126,14 +136,24 @@ model Shift {
   employee            Employee       @relation(fields: [employeeId], references: [id])
   startTime           DateTime       @default(now())
   endTime             DateTime?
+  closedByEmployeeId  String?
+  closedByEmployee    Employee?      @relation("ShiftClosedBy", fields: [closedByEmployeeId], references: [id])
+  status              String         @default("open")
   startingCashCents   Int
   expectedCashCents   Int?
   actualCashCents     Int?
   differenceCashCents Int?
+  countedCashSubmittedAt DateTime?
+  expectedCashRevealedAt DateTime?
+  varianceApprovedByEmployeeId String?
+  varianceApprovedByEmployee Employee? @relation("ShiftVarianceApprovedBy", fields: [varianceApprovedByEmployeeId], references: [id])
+  varianceApprovalNote String?
   notes               String?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
   cashMovements       CashMovement[]
+  cashDrops           CashDrop[]
+  safeLedgerEvents    SafeLedgerEvent[]
 
   @@index([startTime])
 }
@@ -182,11 +202,20 @@ model AppConfig {
   bleachAddonCents             Int      @default(500)
   loyaltyEveryNTransactions    Int      @default(10)
   loyaltyDiscountPct           Int      @default(50)
+  downtimeThresholdMinutes     Int      @default(5)
+  voidSpikePercentThreshold    Int      @default(5)
+  voidSpikeAmountCents         Int      @default(50000)
+  cashVarianceApprovalThresholdCents Int @default(5000)
+  cashDrawerCapCents           Int      @default(200000)
+  cashDrawerSoftWarningPct     Int      @default(80)
+  cashDropResidualCents        Int      @default(50000)
   updatedAt                   DateTime @updatedAt
 }
 
 model EncargoOrder {
   id                String        @id @default(cuid())
+  customerId        String?
+  customer          Customer?     @relation(fields: [customerId], references: [id])
   customerName      String?
   customerPhone     String?
   weightKg          Float
@@ -196,7 +225,7 @@ model EncargoOrder {
   paymentMode       String
   paymentStatus     String        @default("pending")
   paymentMethod     String?
-  status            String        @default("recibido")
+  status            String        @default("order")
   createdByEmployeeId String
   createdByEmployee Employee      @relation("EncargoOrderCreatedBy", fields: [createdByEmployeeId], references: [id])
   receivedAt        DateTime      @default(now())
@@ -209,4 +238,86 @@ model EncargoOrder {
   @@index([status])
   @@index([receivedAt])
   @@index([createdByEmployeeId])
+  @@index([customerId])
+}
+
+model AuditEvent {
+  id              String    @id @default(cuid())
+  type            String
+  payloadJson     String
+  actorEmployeeId String?
+  actorEmployee   Employee? @relation(fields: [actorEmployeeId], references: [id])
+  deviceId        String?
+  createdAt       DateTime  @default(now())
+
+  @@index([type, createdAt])
+  @@index([actorEmployeeId, createdAt])
+}
+
+model VoidReason {
+  code          String   @id
+  label         String
+  requiresNotes Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model CashDrop {
+  id                    String    @id @default(cuid())
+  shiftId               String
+  shift                 Shift     @relation(fields: [shiftId], references: [id])
+  performedByEmployeeId String
+  performedByEmployee   Employee  @relation("CashDropPerformedBy", fields: [performedByEmployeeId], references: [id])
+  approvedByEmployeeId  String?
+  approvedByEmployee    Employee? @relation("CashDropApprovedBy", fields: [approvedByEmployeeId], references: [id])
+  amountCents           Int
+  destination           String    @default("safe")
+  reason                String
+  notes                 String?
+  deviceId              String?
+  overrideUsed          Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  safeLedgerEvents      SafeLedgerEvent[]
+
+  @@index([shiftId, createdAt])
+  @@index([performedByEmployeeId, createdAt])
+}
+
+model SafeLedgerEvent {
+  id                       String    @id @default(cuid())
+  shiftId                  String?
+  shift                    Shift?    @relation(fields: [shiftId], references: [id])
+  cashDropId               String?
+  cashDrop                 CashDrop? @relation(fields: [cashDropId], references: [id])
+  performedByEmployeeId    String?
+  performedByEmployee      Employee? @relation(fields: [performedByEmployeeId], references: [id])
+  type                     String
+  amountDeltaCents         Int
+  expectedBalanceAfterCents Int
+  countedBalanceCents      Int?
+  varianceCents            Int?
+  notes                    String?
+  createdAt                DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([type, createdAt])
+}
+
+model AvailabilityIncident {
+  id           String   @id @default(cuid())
+  machineId    String
+  machine      Machine  @relation(fields: [machineId], references: [id])
+  relayChannel Int?
+  startedAt    DateTime
+  endedAt      DateTime?
+  minutes      Int?
+  reasonCode   String
+  source       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([machineId, startedAt])
+  @@index([startedAt, endedAt])
+  @@index([reasonCode, startedAt])
 }

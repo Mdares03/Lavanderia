@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { TRANSACTION_STATUS } from "@/server/domain/constants";
 import { relayManager } from "@/server/relay/relayManager";
+import { availabilityMonitor } from "@/server/services/availabilityMonitor";
 import { ensureInitialMachineCatalogSeed } from "@/server/services/machineService";
 import { timerService } from "@/server/services/timerService";
 
@@ -19,6 +20,7 @@ class RecoveryService {
     await relayManager.init();
     await ensureInitialMachineCatalogSeed();
     await timerService.bootstrap();
+    await availabilityMonitor.start();
 
     const now = new Date();
     const running = await prisma.transaction.findMany({

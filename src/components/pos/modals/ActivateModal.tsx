@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/components/pos/api";
 import type { CustomerRecord, EncargoOrder, LoyaltyRule, Machine, PricingVariables, ServiceType } from "@/components/pos/types";
@@ -8,6 +8,7 @@ import type { CustomerRecord, EncargoOrder, LoyaltyRule, Machine, PricingVariabl
 type ActivateModalProps = {
   machine: Machine;
   encargoOrders: EncargoOrder[];
+  preferredEncargoOrderId?: string;
   onCancel: () => void;
   onConfirm: (
     machine: Machine,
@@ -43,7 +44,7 @@ function money(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-export function ActivateModal({ machine, encargoOrders, onCancel, onConfirm }: ActivateModalProps) {
+export function ActivateModal({ machine, encargoOrders, preferredEncargoOrderId, onCancel, onConfirm }: ActivateModalProps) {
   const [baseAmountCents, setBaseAmountCents] = useState(machine.defaultPriceCents);
   const [durationMinutes] = useState(machine.defaultDurationMinutes);
   const [serviceType, setServiceType] = useState<ServiceType>("autoservicio");
@@ -81,13 +82,83 @@ export function ActivateModal({ machine, encargoOrders, onCancel, onConfirm }: A
     bleachQty: 0
   });
 
-  const activeEncargoOrders = useMemo(() => encargoOrders.filter((order) => order.status !== "entregado"), [encargoOrders]);
+  const activeEncargoOrders = useMemo(() => encargoOrders.filter((order) => order.status !== "picked_up"), [encargoOrders]);
+  const customerScopedEncargoOrders = useMemo(() => {
+    if (!selectedCustomer) {
+      return activeEncargoOrders;
+    }
+    const scoped = activeEncargoOrders.filter((order) => order.customerId === selectedCustomer.id);
+    return scoped.length > 0 ? scoped : activeEncargoOrders;
+  }, [activeEncargoOrders, selectedCustomer]);
+
+  const hydrateCustomerFromOrder = useCallback(
+    (order: EncargoOrder) => {
+      if (!order.customer) {
+        return;
+      }
+      const orderCustomer = order.customer;
+
+      const existing = customers.find((customer) => customer.id === orderCustomer.id);
+      if (existing) {
+        setSelectedCustomer(existing);
+        return;
+      }
+
+      setSelectedCustomer({
+        id: orderCustomer.id,
+        firstName: orderCustomer.firstName,
+        lastName: orderCustomer.lastName,
+        phone: orderCustomer.phone,
+        email: null,
+        createdAt: "",
+        updatedAt: "",
+        eligibleTransactionCount: 0,
+        totalSpentCents: 0,
+        nextDiscountTransactionNumber: 1,
+        isNextTransactionDiscount: false
+      });
+    },
+    [customers]
+  );
 
   useEffect(() => {
     if (serviceType !== "encargo") {
       setSelectedEncargoOrderId("");
     }
   }, [serviceType]);
+
+  useEffect(() => {
+    if (serviceType !== "encargo" || !selectedCustomer || selectedEncargoOrderId) {
+      return;
+    }
+
+    const match = activeEncargoOrders.find((order) => order.customerId === selectedCustomer.id);
+    if (!match) {
+      return;
+    }
+
+    setSelectedEncargoOrderId(match.id);
+    setBaseAmountCents(match.priceCents);
+  }, [activeEncargoOrders, selectedCustomer, selectedEncargoOrderId, serviceType]);
+
+  useEffect(() => {
+    if (!preferredEncargoOrderId) {
+      return;
+    }
+    const selected = activeEncargoOrders.find((order) => order.id === preferredEncargoOrderId);
+    if (!selected) {
+      return;
+    }
+    setServiceType("encargo");
+    setSelectedEncargoOrderId(selected.id);
+    setBaseAmountCents(selected.priceCents);
+    hydrateCustomerFromOrder(selected);
+    if (selected.customer) {
+      setCustomerQuery(`${selected.customer.firstName} ${selected.customer.lastName}`.trim());
+    } else if (selected.customerName) {
+      setCustomerQuery(selected.customerName);
+    }
+  }, [activeEncargoOrders, hydrateCustomerFromOrder, preferredEncargoOrderId]);
 
   useEffect(() => {
     apiFetch<{ pricing: PricingVariables }>("/api/settings/pricing")
@@ -305,7 +376,7 @@ export function ActivateModal({ machine, encargoOrders, onCancel, onConfirm }: A
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Calculadora encargo</p>
                 <label className="mb-2 grid gap-1 text-xs">
-                  <span className="font-medium text-slate-700">Ligar a orden encargo activa (opcional)</span>
+                  <span className="font-medium text-slate-700">Orden encargo activa (opcional)</span>
                   <select
                     value={selectedEncargoOrderId}
                     onChange={(event) => {
@@ -313,15 +384,21 @@ export function ActivateModal({ machine, encargoOrders, onCancel, onConfirm }: A
                       setSelectedEncargoOrderId(nextId);
                       const selected = activeEncargoOrders.find((order) => order.id === nextId);
                       if (selected) {
+                        hydrateCustomerFromOrder(selected);
                         setBaseAmountCents(selected.priceCents);
+                        if (selected.customer) {
+                          setCustomerQuery(`${selected.customer.firstName} ${selected.customer.lastName}`.trim());
+                        } else if (selected.customerName) {
+                          setCustomerQuery(selected.customerName);
+                        }
                       }
                     }}
                     className="rounded-lg border border-slate-300 px-3 py-2"
                   >
-                    <option value="">Sin ligar a orden</option>
-                    {activeEncargoOrders.map((order) => (
+                    <option value="">Sin orden ligada</option>
+                    {customerScopedEncargoOrders.map((order) => (
                       <option key={order.id} value={order.id}>
-                        {order.customerName || order.customerPhone || "Cliente"} - {order.status} - ${(order.priceCents / 100).toFixed(2)}
+                        {(order.customerName || order.customerPhone || "Cliente")} - {order.status} - ${(order.priceCents / 100).toFixed(2)}
                       </option>
                     ))}
                   </select>

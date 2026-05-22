@@ -13,7 +13,9 @@ import type {
   DashboardTransaction,
   Employee,
   EncargoOrder,
+  KpiReport,
   Machine,
+  OwnerBrief,
   PaymentMethod,
   RelayHealth,
   ReportSummary,
@@ -27,12 +29,13 @@ import { RunningModal } from "@/components/pos/modals/RunningModal";
 import { TicketPreviewModal } from "@/components/pos/modals/TicketPreviewModal";
 import { TransactionDetailModal } from "@/components/pos/modals/TransactionDetailModal";
 
-type TabId = "panel" | "corte" | "reportes" | "config";
+type TabId = "panel" | "corte" | "reportes" | "graficas" | "config";
 
 const tabLabels: Record<TabId, string> = {
   panel: "Panel",
   corte: "Corte",
   reportes: "Reportes",
+  graficas: "Graficas",
   config: "Configuracion"
 };
 
@@ -86,8 +89,10 @@ export function POSDashboard() {
   const [runningMachineId, setRunningMachineId] = useState<string | null>(null);
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
   const [showNewEncargo, setShowNewEncargo] = useState(false);
+  const [preferredEncargoOrderId, setPreferredEncargoOrderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Array<{ id: number; message: string; tone: "success" | "error" | "info" }>>([]);
   const [ticker, setTicker] = useState(Date.now());
   const [reportFrom, setReportFrom] = useState(() => {
     const d = new Date();
@@ -95,8 +100,11 @@ export function POSDashboard() {
     return d.toISOString().slice(0, 16);
   });
   const [reportTo, setReportTo] = useState(() => new Date().toISOString().slice(0, 16));
+  const [reportPeriod, setReportPeriod] = useState<"today" | "yesterday" | "last_7" | "this_month" | "custom">("today");
   const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null);
   const [utilization, setUtilization] = useState<UtilizationRow[]>([]);
+  const [kpiReport, setKpiReport] = useState<KpiReport | null>(null);
+  const [ownerBrief, setOwnerBrief] = useState<OwnerBrief | null>(null);
   const [showChangePin, setShowChangePin] = useState(false);
   const [ticketPreview, setTicketPreview] = useState<TicketPreviewData | null>(null);
   const isAdmin = employee?.isAdmin ?? false;
@@ -107,7 +115,24 @@ export function POSDashboard() {
     () => (sessionPin ? { "x-admin-pin": sessionPin } : ({} as Record<string, string>)),
     [sessionPin]
   );
-  const availableTabs = useMemo(() => (isAdmin ? (["panel", "corte", "reportes", "config"] as TabId[]) : (["panel", "corte"] as TabId[])), [isAdmin]);
+  const availableTabs = useMemo(
+    () => (isAdmin ? (["panel", "corte", "reportes", "graficas", "config"] as TabId[]) : (["panel", "corte"] as TabId[])),
+    [isAdmin]
+  );
+  const pushToast = useCallback((message: string, tone: "success" | "error" | "info" = "success") => {
+    setToasts((current) => [...current, { id: Date.now() + Math.floor(Math.random() * 1000), message, tone }]);
+  }, []);
+
+  useEffect(() => {
+    if (toasts.length === 0) {
+      return;
+    }
+    const toastId = toasts[0]?.id;
+    const timeout = window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== toastId));
+    }, 2200);
+    return () => window.clearTimeout(timeout);
+  }, [toasts]);
 
   const selectedAvailable = useMemo(() => machines.find((machine) => machine.id === activateMachineId) ?? null, [activateMachineId, machines]);
   const selectedRunning = useMemo(() => machines.find((machine) => machine.id === runningMachineId) ?? null, [runningMachineId, machines]);
@@ -165,7 +190,9 @@ export function POSDashboard() {
     const [machinesPayload, relayPayload, shiftPayload, txPayload, encargoPayload] = await Promise.all([
       apiFetch<{ machines: Machine[] }>("/api/machines"),
       apiFetch<{ health: RelayHealth }>("/api/system/relay"),
-      apiFetch<ActiveShiftPayload>("/api/shifts/active"),
+      apiFetch<ActiveShiftPayload>("/api/shifts/active", {
+        headers: sessionPin ? { "x-session-pin": sessionPin } : undefined
+      }),
       apiFetch<{ transactions: DashboardTransaction[] }>(`/api/transactions?${txQuery}`),
       apiFetch<{ orders: EncargoOrder[] }>("/api/encargo-orders")
     ]);
@@ -186,7 +213,7 @@ export function POSDashboard() {
       }
     }
     finishedTxIdsRef.current = newFinishedIds;
-  }, [playFinishChime]);
+  }, [playFinishChime, sessionPin]);
 
   const loadEmployees = useCallback(async () => {
     if (!isAdmin) {
@@ -203,23 +230,33 @@ export function POSDashboard() {
     if (!isAdmin) {
       setReportSummary(null);
       setUtilization([]);
+      setKpiReport(null);
+      setOwnerBrief(null);
       setReportTransactions([]);
       return;
     }
-    const query = `from=${encodeURIComponent(new Date(reportFrom).toISOString())}&to=${encodeURIComponent(new Date(reportTo).toISOString())}`;
+    const customRangeQuery = `from=${encodeURIComponent(new Date(reportFrom).toISOString())}&to=${encodeURIComponent(new Date(reportTo).toISOString())}`;
+    const periodQuery = reportPeriod === "custom" ? `period=custom&${customRangeQuery}` : `period=${reportPeriod}`;
+    const summaryQuery = customRangeQuery;
     const [summaryPayload, utilizationPayload, txPayload] = await Promise.all([
-      apiFetch<ReportSummary>(`/api/reports/summary?${query}`, {
+      apiFetch<ReportSummary>(`/api/reports/summary?${summaryQuery}`, {
         headers: adminHeaders
       }),
-      apiFetch<{ utilization: UtilizationRow[] }>(`/api/reports/utilization?${query}`, {
+      apiFetch<{ utilization: UtilizationRow[] }>(`/api/reports/utilization?${summaryQuery}`, {
         headers: adminHeaders
       }),
-      apiFetch<{ transactions: DashboardTransaction[] }>(`/api/transactions?${query}&limit=400`)
+      apiFetch<{ transactions: DashboardTransaction[] }>(`/api/transactions?${summaryQuery}&limit=400`)
+    ]);
+    const [kpisPayload, briefPayload] = await Promise.all([
+      apiFetch<KpiReport>(`/api/reports/kpis?${periodQuery}`, { headers: adminHeaders }),
+      apiFetch<OwnerBrief>(`/api/reports/owner-brief?${periodQuery}`, { headers: adminHeaders })
     ]);
     setReportSummary(summaryPayload);
     setUtilization(utilizationPayload.utilization);
     setReportTransactions(txPayload.transactions);
-  }, [adminHeaders, isAdmin, reportFrom, reportTo]);
+    setKpiReport(kpisPayload);
+    setOwnerBrief(briefPayload);
+  }, [adminHeaders, isAdmin, reportFrom, reportPeriod, reportTo]);
 
   const exportReports = useCallback(async () => {
     if (!isAdmin || !sessionPin) {
@@ -260,7 +297,7 @@ export function POSDashboard() {
     const id = setInterval(() => {
       setTicker(Date.now());
       loadDashboard().catch(() => undefined);
-      if (tab === "reportes" && isAdmin) {
+      if ((tab === "reportes" || tab === "graficas") && isAdmin) {
         loadReports().catch(() => undefined);
       }
     }, 5000);
@@ -305,6 +342,8 @@ export function POSDashboard() {
     setSelectedTransactionId(null);
     setRunningMachineId(null);
     setActivateMachineId(null);
+    setPreferredEncargoOrderId(null);
+    setToasts([]);
   };
 
   const activate = async (
@@ -377,6 +416,7 @@ export function POSDashboard() {
     }
 
     setActivateMachineId(null);
+    setPreferredEncargoOrderId(null);
     await loadDashboard();
   };
 
@@ -430,14 +470,23 @@ export function POSDashboard() {
   };
 
   const updateEncargoStatus = async (input: { orderId: string; status: EncargoOrder["status"]; paymentMethod?: PaymentMethod }) => {
-    await apiFetch(`/api/encargo-orders/${input.orderId}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        status: input.status,
-        paymentMethod: input.paymentMethod
-      })
-    });
-    await loadDashboard();
+    try {
+      await apiFetch(`/api/encargo-orders/${input.orderId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: input.status,
+          paymentMethod: input.paymentMethod
+        })
+      });
+      await loadDashboard();
+      const statusLabel =
+        input.status === "processing" ? "processing" : input.status === "ready" ? "ready" : input.status === "picked_up" ? "picked up" : "order";
+      pushToast(`Encargo marcado como ${statusLabel}`, "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible actualizar encargo";
+      setError(message);
+      pushToast(message, "error");
+    }
   };
 
   if (!employee) {
@@ -458,7 +507,7 @@ export function POSDashboard() {
                 key={key}
                 onClick={() => {
                   setTab(key);
-                  if (key === "reportes" && isAdmin) {
+                  if ((key === "reportes" || key === "graficas") && isAdmin) {
                     loadReports().catch(() => undefined);
                   }
                 }}
@@ -487,6 +536,24 @@ export function POSDashboard() {
       )}
       {error && <p className="mb-4 rounded-xl bg-red-100 px-4 py-3 text-sm text-red-700">{error}</p>}
       {loading && <p className="mb-4 text-sm text-slate-500">Cargando datos...</p>}
+      {toasts.length > 0 && (
+        <section className="pointer-events-none fixed right-4 top-4 z-[60] flex w-full max-w-sm flex-col gap-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`rounded-xl px-4 py-3 text-sm font-semibold shadow-lg ${
+                toast.tone === "success"
+                  ? "bg-emerald-600 text-white"
+                  : toast.tone === "error"
+                    ? "bg-red-600 text-white"
+                    : "bg-slate-800 text-white"
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </section>
+      )}
 
       {tab === "panel" && (
         <PanelTab
@@ -498,6 +565,10 @@ export function POSDashboard() {
           onSelectRunning={setRunningMachineId}
           onSelectTransaction={setSelectedTransactionId}
           onCreateEncargo={() => setShowNewEncargo(true)}
+          onAssignEncargoToMachine={(orderId) => {
+            setPreferredEncargoOrderId(orderId);
+            pushToast("Encargo listo: ahora toca una lavadora disponible para activarlo", "info");
+          }}
           onUpdateEncargoStatus={updateEncargoStatus}
         />
       )}
@@ -515,12 +586,37 @@ export function POSDashboard() {
 
       {tab === "reportes" && isAdmin && (
         <ReportsTab
+          mode="reportes"
           reportFrom={reportFrom}
           reportTo={reportTo}
+          reportPeriod={reportPeriod}
           setReportFrom={setReportFrom}
           setReportTo={setReportTo}
+          setReportPeriod={setReportPeriod}
           summary={reportSummary}
           utilization={utilization}
+          kpiReport={kpiReport}
+          ownerBrief={ownerBrief}
+          transactions={reportTransactions}
+          onSelectTransaction={setSelectedTransactionId}
+          onLoad={loadReports}
+          onExport={exportReports}
+        />
+      )}
+
+      {tab === "graficas" && isAdmin && (
+        <ReportsTab
+          mode="graficas"
+          reportFrom={reportFrom}
+          reportTo={reportTo}
+          reportPeriod={reportPeriod}
+          setReportFrom={setReportFrom}
+          setReportTo={setReportTo}
+          setReportPeriod={setReportPeriod}
+          summary={reportSummary}
+          utilization={utilization}
+          kpiReport={kpiReport}
+          ownerBrief={ownerBrief}
           transactions={reportTransactions}
           onSelectTransaction={setSelectedTransactionId}
           onLoad={loadReports}
@@ -541,7 +637,16 @@ export function POSDashboard() {
       )}
 
       {selectedAvailable && (
-        <ActivateModal machine={selectedAvailable} encargoOrders={encargoOrders} onCancel={() => setActivateMachineId(null)} onConfirm={activate} />
+        <ActivateModal
+          machine={selectedAvailable}
+          encargoOrders={encargoOrders}
+          preferredEncargoOrderId={preferredEncargoOrderId ?? undefined}
+          onCancel={() => {
+            setActivateMachineId(null);
+            setPreferredEncargoOrderId(null);
+          }}
+          onConfirm={activate}
+        />
       )}
 
       {selectedRunning && selectedRunning.transaction && (
@@ -567,8 +672,10 @@ export function POSDashboard() {
         <NewEncargoModal
           employeeId={employee.id}
           onClose={() => setShowNewEncargo(false)}
-          onCreated={async () => {
+          onCreated={async (order) => {
             setShowNewEncargo(false);
+            setPreferredEncargoOrderId(order.id);
+            pushToast("Encargo creado. Ahora selecciona una lavadora para asignarlo", "success");
             await loadDashboard();
           }}
         />

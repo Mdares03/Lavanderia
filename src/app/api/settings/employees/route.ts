@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { ensurePinAvailable, requireAdminFromRequest } from "@/server/services/authService";
+import { writeAuditEvent } from "@/server/services/auditLog";
 import { ensureSystemBootstrapped } from "@/server/system/bootstrap";
 
 const createSchema = z.object({
@@ -28,11 +29,21 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   await ensureSystemBootstrapped();
   try {
-    await requireAdminFromRequest(request);
+    const admin = await requireAdminFromRequest(request);
     const payload = createSchema.parse(await request.json());
     await ensurePinAvailable(payload.pin);
     const employee = await prisma.employee.create({
       data: payload
+    });
+    await writeAuditEvent({
+      type: "role_changed",
+      actorEmployeeId: admin.id,
+      payload: {
+        action: "employee_created",
+        employeeId: employee.id,
+        isAdmin: employee.isAdmin,
+        isActive: employee.isActive
+      }
     });
     return ok({ employee }, 201);
   } catch (error) {

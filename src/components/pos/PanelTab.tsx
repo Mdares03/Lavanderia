@@ -12,6 +12,7 @@ type PanelTabProps = {
   onSelectRunning: (machineId: string) => void;
   onSelectTransaction: (transactionId: string) => void;
   onCreateEncargo: () => void;
+  onAssignEncargoToMachine: (orderId: string) => void;
   onUpdateEncargoStatus: (input: { orderId: string; status: EncargoOrder["status"]; paymentMethod?: PaymentMethod }) => Promise<void>;
 };
 
@@ -39,12 +40,10 @@ function txStatusLabel(status: string) {
 }
 
 function encargoStatusLabel(status: EncargoOrder["status"]) {
-  if (status === "lavando") return "Lavando";
-  if (status === "secando") return "Secando";
-  if (status === "doblando") return "Doblando";
-  if (status === "listo") return "Listo";
-  if (status === "entregado") return "Entregado";
-  return "Recibido";
+  if (status === "processing") return "Processing";
+  if (status === "ready") return "Ready";
+  if (status === "picked_up") return "Picked up";
+  return "Order";
 }
 
 export function PanelTab({
@@ -56,6 +55,7 @@ export function PanelTab({
   onSelectRunning,
   onSelectTransaction,
   onCreateEncargo,
+  onAssignEncargoToMachine,
   onUpdateEncargoStatus
 }: PanelTabProps) {
   const washers = machines.filter((machine) => machine.type === "washer");
@@ -173,9 +173,9 @@ export function PanelTab({
           {encargoOrders.length === 0 && <p className="text-sm text-slate-500">No hay encargos activos.</p>}
           {encargoOrders.map((order) => {
             const delayedClass =
-              order.status === "listo" && order.readyForHours >= 48
+              order.status === "ready" && order.readyForHours >= 48
                 ? "border-red-300 bg-red-50"
-                : order.status === "listo" && order.readyForHours >= 24
+                : order.status === "ready" && order.readyForHours >= 24
                   ? "border-amber-300 bg-amber-50"
                   : "border-slate-200 bg-slate-50";
 
@@ -194,16 +194,22 @@ export function PanelTab({
                 {order.notes && <p className="mt-1 text-xs text-slate-600">Notas: {order.notes}</p>}
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
-                    onClick={() => onUpdateEncargoStatus({ orderId: order.id, status: "doblando" })}
-                    className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
+                    onClick={() => onAssignEncargoToMachine(order.id)}
+                    className="rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    Marcar doblando
+                    Asignar lavadora
                   </button>
                   <button
-                    onClick={() => onUpdateEncargoStatus({ orderId: order.id, status: "listo" })}
+                    onClick={() => onUpdateEncargoStatus({ orderId: order.id, status: "processing" })}
+                    className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
+                  >
+                    Marcar processing
+                  </button>
+                  <button
+                    onClick={() => onUpdateEncargoStatus({ orderId: order.id, status: "ready" })}
                     className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    Marcar listo
+                    Marcar ready
                   </button>
                   <button
                     onClick={async () => {
@@ -215,16 +221,16 @@ export function PanelTab({
                         }
                         await onUpdateEncargoStatus({
                           orderId: order.id,
-                          status: "entregado",
+                          status: "picked_up",
                           paymentMethod: method
                         });
                         return;
                       }
-                      await onUpdateEncargoStatus({ orderId: order.id, status: "entregado" });
+                      await onUpdateEncargoStatus({ orderId: order.id, status: "picked_up" });
                     }}
                     className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    Marcar entregado
+                    Marcar picked up
                   </button>
                 </div>
               </div>

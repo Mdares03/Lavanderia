@@ -138,11 +138,12 @@ export type ActiveShiftPayload = {
   summary: {
     totals: {
       totalSalesCents: number;
-      expectedCashCents: number;
+      expectedCashCents: number | null;
       transactionCount: number;
       cashSalesCents: number;
       depositsCents: number;
       withdrawalsCents: number;
+      cashDropsCents: number;
       voidedCount: number;
       voidedTotalCents: number;
       byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
@@ -165,6 +166,30 @@ export type ActiveShiftPayload = {
       createdAt: string;
       employeeName: string;
     }>;
+    cashDrops: Array<{
+      id: string;
+      amountCents: number;
+      destination: string;
+      reason: string;
+      notes: string | null;
+      overrideUsed: boolean;
+      createdAt: string;
+      employeeName: string;
+    }>;
+    drawerControl: {
+      currentCashCents: number | null;
+      capCents: number;
+      softWarningCents: number;
+      residualCents: number;
+      needsWarning: boolean;
+      blockedAtCap: boolean;
+      recommendedDropCents: number;
+    };
+    safeLedger: {
+      expectedBalanceCents: number;
+      lastDropAt: string | null;
+      lastDropAmountCents: number | null;
+    };
   } | null;
 };
 
@@ -186,6 +211,93 @@ export type UtilizationRow = {
   usedMinutes: number;
   totalWindowMinutes: number;
   utilizationPct: number;
+};
+
+export type KpiReport = {
+  period: {
+    key: string;
+    from: string;
+    to: string;
+    baselineFrom: string;
+    baselineTo: string;
+  };
+  kpis: {
+    totalRevenueCents: number;
+    transactionCount: number;
+    avgTicketCents: number | null;
+    avgTicketByService: Array<{ serviceType: ServiceType; revenueCents: number; transactions: number; avgTicketCents: number | null }>;
+    paymentMix: Array<{ paymentMethod: PaymentMethod; amountCents: number; count: number }>;
+    serviceMix: Array<{ serviceType: ServiceType; revenueCents: number; transactions: number; avgTicketCents: number | null }>;
+    cyclesByMachine: Array<{ machineId: string; machineName: string; cycles: number }>;
+    peakHourLoad: { hour: number; cycles: number } | null;
+    demandByHour: Array<{ hour: number; cycles: number }>;
+    salesByHour: Array<{ hour: number; amountCents: number }>;
+    dailySales: Array<{ date: string; amountCents: number }>;
+    serviceMixByDay: Array<{ date: string; autoservicio: number; encargo: number; xl: number }>;
+    paymentMixByDay: Array<{ date: string; cash: number; card: number; transfer: number }>;
+  };
+  comparison: {
+    hasBaselineData: boolean;
+    limitedHistory: boolean;
+    baselineCoverage: { expectedDays: number; daysWithData: number; ratio: number };
+    currentCoverage: { expectedDays: number; daysWithData: number; ratio: number };
+    deltaRevenuePct: number | null;
+    deltaTransactionsPct: number | null;
+    deltaAvgTicketPct: number | null;
+    message: string | null;
+  };
+};
+
+export type OwnerBrief = {
+  period: KpiReport["period"];
+  comparison: KpiReport["comparison"];
+  revenueSnapshot: {
+    totalRevenueCents: number;
+    transactionCount: number;
+    byService: KpiReport["kpis"]["serviceMix"];
+  };
+  paymentMix: KpiReport["kpis"]["paymentMix"];
+  cashControl: {
+    safeExpectedBalanceCents: number;
+    cashDropsCount: number;
+    cashDroppedCents: number;
+    activeShiftId: string | null;
+    lastDropAt: string | null;
+    lastDropAmountCents: number | null;
+  };
+  exceptions: {
+    voidedCount: number;
+    voidedTotalCents: number;
+    relayFailureCount: number;
+    availabilityIncidentsCount: number;
+    plannedIncidentsCount: number;
+    unplannedIncidentsCount: number;
+    totalDowntimeMinutes: number;
+  };
+  operations: {
+    cyclesByMachine: KpiReport["kpis"]["cyclesByMachine"];
+    peakHourLoad: KpiReport["kpis"]["peakHourLoad"];
+    demandByHour: KpiReport["kpis"]["demandByHour"];
+  };
+  encargoSummary: {
+    wipCount: number;
+    readyNotCollectedCount: number;
+    oldestWipMinutes: number | null;
+  };
+  backupStatus: {
+    status: string;
+    message: string;
+  };
+  availabilityTimeline: Array<{
+    incidentId: string;
+    machineId: string;
+    relayChannel: number | null;
+    reasonCode: string;
+    source: string;
+    startedAt: string;
+    endedAt: string | null;
+    minutes: number | null;
+  }>;
 };
 
 export type PricingVariables = {
@@ -281,21 +393,29 @@ export type ShiftHistoryItem = {
     id: string;
     name: string;
   };
-  totals: {
-    totalSalesCents: number;
-    transactionCount: number;
-    byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
-    voidedCount: number;
-    voidedTotalCents: number;
-    depositsCents: number;
-    withdrawalsCents: number;
-  };
+    totals: {
+      totalSalesCents: number;
+      transactionCount: number;
+      byPaymentMethod: Array<{ paymentMethod: string; amountCents: number; count: number }>;
+      voidedCount: number;
+      voidedTotalCents: number;
+      depositsCents: number;
+      withdrawalsCents: number;
+      cashDropsCents: number;
+    };
 };
 
-export type EncargoStatus = "recibido" | "lavando" | "secando" | "doblando" | "listo" | "entregado";
+export type EncargoStatus = "order" | "processing" | "ready" | "picked_up";
 
 export type EncargoOrder = {
   id: string;
+  customerId: string | null;
+  customer: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+  } | null;
   customerName: string | null;
   customerPhone: string | null;
   weightKg: number;

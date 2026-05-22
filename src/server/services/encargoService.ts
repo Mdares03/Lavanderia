@@ -12,17 +12,14 @@ import {
 } from "@/server/domain/constants";
 
 const ACTIVE_ENCARGO_STATUSES: EncargoOrderStatusValue[] = [
-  ENCARGO_ORDER_STATUS.recibido,
-  ENCARGO_ORDER_STATUS.lavando,
-  ENCARGO_ORDER_STATUS.secando,
-  ENCARGO_ORDER_STATUS.doblando,
-  ENCARGO_ORDER_STATUS.listo
+  ENCARGO_ORDER_STATUS.order,
+  ENCARGO_ORDER_STATUS.processing,
+  ENCARGO_ORDER_STATUS.ready
 ];
 
 export async function createEncargoOrder(input: {
   employeeId: string;
-  customerName?: string;
-  customerPhone?: string;
+  customerId: string;
   weightKg: number;
   loads: number;
   notes?: string;
@@ -38,6 +35,14 @@ export async function createEncargoOrder(input: {
     throw new Error("Empleado no valido");
   }
 
+  const customer = await prisma.customer.findUnique({
+    where: { id: input.customerId },
+    select: { id: true, isActive: true, firstName: true, lastName: true, phone: true }
+  });
+  if (!customer || !customer.isActive) {
+    throw new Error("Cliente no valido");
+  }
+
   const config = await prisma.appConfig.findUnique({
     where: { id: 1 },
     select: { encargoPricePerKgCents: true, encargoMinimumChargeCents: true }
@@ -51,8 +56,9 @@ export async function createEncargoOrder(input: {
 
   return prisma.encargoOrder.create({
     data: {
-      customerName: input.customerName?.trim() || null,
-      customerPhone: input.customerPhone?.trim() || null,
+      customerId: customer.id,
+      customerName: `${customer.firstName} ${customer.lastName}`.trim(),
+      customerPhone: customer.phone,
       weightKg: input.weightKg,
       loads: input.loads,
       notes: input.notes?.trim() || null,
@@ -67,7 +73,7 @@ export async function createEncargoOrder(input: {
               ? PAYMENT_METHODS.transfer
               : PAYMENT_METHODS.cash
           : null,
-      status: ENCARGO_ORDER_STATUS.recibido,
+      status: ENCARGO_ORDER_STATUS.order,
       createdByEmployeeId: employee.id
     }
   });
@@ -87,6 +93,9 @@ export async function listEncargoOrders(input?: { includeDelivered?: boolean }) 
         },
     orderBy: [{ status: "asc" }, { receivedAt: "asc" }],
     include: {
+      customer: {
+        select: { id: true, firstName: true, lastName: true, phone: true }
+      },
       createdByEmployee: {
         select: { id: true, name: true }
       },
@@ -108,11 +117,20 @@ export async function listEncargoOrders(input?: { includeDelivered?: boolean }) 
 
   return orders.map((order) => {
     const elapsedMinutes = Math.max(0, Math.floor((now - order.receivedAt.getTime()) / 60_000));
-    const readySince = order.readyAt ?? (order.status === ENCARGO_ORDER_STATUS.listo ? order.updatedAt : null);
+    const readySince = order.readyAt ?? (order.status === ENCARGO_ORDER_STATUS.ready ? order.updatedAt : null);
     const readyForHours = readySince ? Math.max(0, Math.floor((now - readySince.getTime()) / 3_600_000)) : 0;
 
     return {
       id: order.id,
+      customerId: order.customerId,
+      customer: order.customer
+        ? {
+            id: order.customer.id,
+            firstName: order.customer.firstName,
+            lastName: order.customer.lastName,
+            phone: order.customer.phone
+          }
+        : null,
       customerName: order.customerName,
       customerPhone: order.customerPhone,
       weightKg: order.weightKg,
@@ -156,7 +174,7 @@ export async function setEncargoOrderStatus(input: {
     throw new Error("Encargo no encontrado");
   }
 
-  if (order.status === ENCARGO_ORDER_STATUS.entregado) {
+  if (order.status === ENCARGO_ORDER_STATUS.pickedUp) {
     throw new Error("El encargo ya fue entregado");
   }
 
@@ -170,11 +188,11 @@ export async function setEncargoOrderStatus(input: {
     status: input.status
   };
 
-  if (input.status === ENCARGO_ORDER_STATUS.listo) {
+  if (input.status === ENCARGO_ORDER_STATUS.ready) {
     updates.readyAt = new Date();
   }
 
-  if (input.status === ENCARGO_ORDER_STATUS.entregado) {
+  if (input.status === ENCARGO_ORDER_STATUS.pickedUp) {
     updates.deliveredAt = new Date();
     updates.paymentStatus = ENCARGO_PAYMENT_STATUS.paid;
 
@@ -203,14 +221,13 @@ export async function setEncargoOrderMachineStage(input: { orderId: string; mach
   if (!order) {
     throw new Error("Encargo no encontrado");
   }
-  if (order.status === ENCARGO_ORDER_STATUS.entregado) {
+  if (order.status === ENCARGO_ORDER_STATUS.pickedUp) {
     throw new Error("El encargo ya fue entregado");
   }
 
-  const nextStatus = input.machineType === "dryer" ? ENCARGO_ORDER_STATUS.secando : ENCARGO_ORDER_STATUS.lavando;
   await prisma.encargoOrder.update({
     where: { id: order.id },
-    data: { status: nextStatus }
+    data: { status: ENCARGO_ORDER_STATUS.processing }
   });
 }
 
